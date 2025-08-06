@@ -102,7 +102,7 @@ def on_bufferactivated(args):
     editor.callback(on_charadded, [SCINTILLANOTIFICATION.CHARADDED])
 
 # Initialize form content
-editor.setText("SR#:\n\nPolicy:\n")
+editor.setText("SR# \n\nPolicy: \n")
 
 notepad.callback(on_bufferactivated, [NOTIFICATION.BUFFERACTIVATED])
 editor.callback(on_charadded, [SCINTILLANOTIFICATION.CHARADDED])
