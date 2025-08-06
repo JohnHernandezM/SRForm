@@ -1,0 +1,126 @@
+import Tkinter as tk
+import ttk
+
+# Sample lookup table
+lookup_table = [
+    {"Code": "12", "State": "NY", "Session": "East"},
+    {"Code": "34", "State": "TX", "Session": "Texas"},
+    {"Code": "56", "State": "CA", "Session": "West"},
+]
+
+lob_options = [
+    "Artisan Contractor", "Auto Service & Repair", "Commercial Auto",
+    "Habitational", "Manufacturing", "Real Estate", "Restaurant",
+    "Retail", "Umbrella", "Wholesale Distribution"
+]
+
+def get_session_region(value):
+    value = value.strip().upper()
+    for row in lookup_table:
+        if value.isdigit() and row["Code"] == value:
+            return row["Session"]
+        elif value.isalpha() and row["State"].upper() == value:
+            return row["Session"]
+    return ""
+
+def check_all_fields(*args):
+    if sr_var.get() and policy_var.get() and status_var.get() and lob_var.get() and session_region.get():
+        question_frame.pack(pady=10)
+
+def update_session(*args):
+    val = session_var.get()
+    resolved = get_session_region(val)
+    session_region.set(resolved)
+    check_all_fields()
+
+def update_q1_suffix(*args):
+    name = q1_name.get().strip()
+    t = q1_type.get()
+    l = licensed.get()
+    suffix = ""
+    if t == "Agent":
+        suffix = " - Licensed Agent" if l == "Yes" else " - Agent"
+    elif t == "Agency Rep":
+        suffix = " - Licensed Agency Rep" if l == "Yes" else " - Agency Rep"
+    elif t == "Insured":
+        suffix = " - Insured"
+    q1_label.config(text="1. Who is requesting? {}{}".format(name, suffix))
+    if t in ["Agent", "Agency Rep"]:
+        license_row.pack()
+    else:
+        license_row.forget()
+
+# Root
+root = tk.Tk()
+root.title("New SR Form")
+
+# Top fields
+sr_var = tk.StringVar()
+policy_var = tk.StringVar()
+status_var = tk.StringVar()
+lob_var = tk.StringVar()
+session_var = tk.StringVar()
+session_region = tk.StringVar()
+
+tk.Label(root, text="SR#:").pack()
+tk.Entry(root, textvariable=sr_var).pack()
+
+tk.Label(root, text="Policy:").pack()
+tk.Entry(root, textvariable=policy_var).pack()
+
+tk.Label(root, text="Policy Status:").pack()
+tk.Entry(root, textvariable=status_var).pack()
+
+tk.Label(root, text="Line of Business:").pack()
+ttk.Combobox(root, values=lob_options, textvariable=lob_var, state="readonly").pack()
+
+tk.Label(root, text="Session (Code or State):").pack()
+tk.Entry(root, textvariable=session_var).pack()
+tk.Label(root, textvariable=session_region, fg="blue").pack()
+
+# Watch session input
+session_var.trace("w", update_session)
+
+# Question Frame (initially hidden)
+question_frame = tk.Frame(root)
+
+# Q1
+q1_name = tk.StringVar()
+q1_type = tk.StringVar()
+licensed = tk.StringVar()
+
+q1_label = tk.Label(question_frame, text="1. Who is requesting?")
+q1_label.pack()
+
+tk.Entry(question_frame, textvariable=q1_name).pack()
+
+tk.Label(question_frame, text="- Type:").pack()
+ttk.Combobox(question_frame, values=["Agent", "Agency Rep", "Insured"], textvariable=q1_type, state="readonly").pack()
+
+license_row = tk.Frame(question_frame)
+tk.Label(license_row, text="- Licensed:").pack(side="left")
+ttk.Combobox(license_row, values=["Yes", "No"], textvariable=licensed, state="readonly").pack(side="left")
+
+# Q2
+tk.Label(question_frame, text="2. What is being requested?").pack()
+tk.Text(question_frame, height=3, width=50).pack()
+
+# Q3
+tk.Label(question_frame, text="3. Is this an Endorsement or a BO/RI?").pack()
+tk.Text(question_frame, height=3, width=50).pack()
+
+# Q4
+tk.Label(question_frame, text="4. What is the Effective Date?").pack()
+tk.Entry(question_frame).pack()
+
+# Q5
+tk.Label(question_frame, text="5. Does it make sense?").pack()
+tk.Entry(question_frame).pack()
+
+# Trace changes
+q1_name.trace("w", update_q1_suffix)
+q1_type.trace("w", update_q1_suffix)
+licensed.trace("w", update_q1_suffix)
+
+# Launch
+root.mainloop()
