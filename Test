@@ -1,11 +1,12 @@
 from Npp import *
 import re
 
-# Lookup Table (example data)
+# --- Example lookup table ---
 lookup_table = [
     {"Code": "12", "State": "NY", "Session": "East"},
     {"Code": "34", "State": "TX", "Session": "Texas"},
     {"Code": "56", "State": "CA", "Session": "West"},
+    # Add your actual values here
 ]
 
 line_business_options = [
@@ -49,7 +50,6 @@ def on_charadded(char):
         if line_index("Session:") == -1:
             insert_or_replace_line("Session:", "", policy_i + 3)
 
-    # Validate Session
     session_i = line_index("Session:")
     if session_i != -1:
         session_line = lines[session_i]
@@ -59,7 +59,6 @@ def on_charadded(char):
             if resolved:
                 editor.replaceWholeLine(session_i, "Session: {} [{}]\n".format(session_input, resolved))
 
-    # Questions 1–5
     required = ["SR#:", "Policy:", "Policy Status:", "Line of Business:", "Session:"]
     all_ready = all(line_index(lbl) != -1 and lines[line_index(lbl)].split(":", 1)[-1].strip() for lbl in required)
 
@@ -72,14 +71,12 @@ def on_charadded(char):
             "5. Does it make sense?\n"
         )
 
-    # Licensed
     type_i = line_index("- Type:")
     if type_i != -1:
         type_val = lines[type_i].split(":", 1)[-1].strip()
         if type_val in ["Agent", "Agency Rep"] and line_index("- Licensed:") == -1:
             editor.insertText(editor.positionFromLine(type_i + 1), "- Licensed: [Yes / No]\n")
 
-    # Q1 suffix formatting
     q1_i = line_index("1. Who is requesting?")
     if q1_i != -1:
         q1_line = lines[q1_i]
@@ -104,9 +101,9 @@ def on_charadded(char):
 def on_bufferactivated(args):
     editor.callback(on_charadded, [SCINTILLANOTIFICATION.CHARADDED])
 
-# Insert initial form
+# Initialize form content
 editor.setText("SR#:\n\nPolicy:\n")
 
-# Register event handlers
 notepad.callback(on_bufferactivated, [NOTIFICATION.BUFFERACTIVATED])
 editor.callback(on_charadded, [SCINTILLANOTIFICATION.CHARADDED])
+
