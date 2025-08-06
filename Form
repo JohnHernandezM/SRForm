@@ -59,7 +59,7 @@ def on_charadded(char):
             if resolved:
                 editor.replaceWholeLine(session_i, "Session: {} [{}]\n".format(session_input, resolved))
 
-    required = ["SR#:", "Policy:", "Policy Status:", "Line of Business:", "Session:"]
+    required = ["SR#", "Policy:", "Policy Status:", "Line of Business:", "Session:"]
     all_ready = all(line_index(lbl) != -1 and lines[line_index(lbl)].split(":", 1)[-1].strip() for lbl in required)
 
     if all_ready and line_index("1. Who is requesting?") == -1:
