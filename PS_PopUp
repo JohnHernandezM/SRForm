@@ -1,39 +1,42 @@
-import inspect
-import os
-import ctypes
+import Tkinter
+import tkSimpleDialog
+import tkMessageBox
 from Npp import *
 
-choices = ['Active', 'Cancelled']
+handled_lines = {}
 
-# Create a simple selection dialog using ctypes
 def ask_choice(title, message, choices):
-    import Tkinter
-    import tkSimpleDialog
-    import tkMessageBox
-
     root = Tkinter.Tk()
-    root.withdraw()  # Hide the main window
-
-    # Ask user to type one of the options
+    root.withdraw()
     while True:
         response = tkSimpleDialog.askstring(title, message + "\nOptions: " + ', '.join(choices))
         if response is None:
-            return None  # User cancelled
+            return None
         response = response.strip()
         if response in choices:
             return response
         tkMessageBox.showerror("Invalid Input", "Please choose one of: " + ', '.join(choices))
 
-# Call the dialog
-selected = ask_choice("Policy Status", "Please select Policy Status:", choices)
+def on_caret_or_edit(args):
+    caret_line = editor.lineFromPosition(editor.getCurrentPos())
+    line_text = editor.getLine(caret_line).strip()
 
-if selected:
-    # Insert into editor after "Policy Status: "
-    line_number = 2  # assuming line 3 (0-based index)
-    line_text = editor.getLine(line_number)
-
-    if "Policy Status:" in line_text:
-        new_line = "Policy Status: " + selected + "\n"
-        editor.replaceWholeLine(line_number, new_line)
+    if line_text.lower().startswith("policy status:"):
+        suffix = line_text[14:].strip()
+        if not suffix and not handled_lines.get(caret_line, False):
+            selected = ask_choice("Policy Status", "Please select Policy Status:", ['Active', 'Cancelled'])
+            if selected:
+                new_line = "Policy Status: " + selected + "\n"
+                editor.replaceWholeLine(caret_line, new_line)
+                handled_lines[caret_line] = True
     else:
-        editor.appendText("\nPolicy Status: " + selected)
+        # Reset if user cleared line back to empty
+        if caret_line in handled_lines:
+            if line_text.lower().startswith("policy status:") and line_text.strip() == "Policy Status:":
+                handled_lines[caret_line] = False
+
+# Clear previous callbacks
+notepad.clearCallbacks([NOTIFICATION.UPDATEUI])
+
+# Register the real-time update callback
+notepad.callback(on_caret_or_edit, [NOTIFICATION.UPDATEUI])
