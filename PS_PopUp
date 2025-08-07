@@ -1,0 +1,39 @@
+import inspect
+import os
+import ctypes
+from Npp import *
+
+choices = ['Active', 'Cancelled']
+
+# Create a simple selection dialog using ctypes
+def ask_choice(title, message, choices):
+    import Tkinter
+    import tkSimpleDialog
+    import tkMessageBox
+
+    root = Tkinter.Tk()
+    root.withdraw()  # Hide the main window
+
+    # Ask user to type one of the options
+    while True:
+        response = tkSimpleDialog.askstring(title, message + "\nOptions: " + ', '.join(choices))
+        if response is None:
+            return None  # User cancelled
+        response = response.strip()
+        if response in choices:
+            return response
+        tkMessageBox.showerror("Invalid Input", "Please choose one of: " + ', '.join(choices))
+
+# Call the dialog
+selected = ask_choice("Policy Status", "Please select Policy Status:", choices)
+
+if selected:
+    # Insert into editor after "Policy Status: "
+    line_number = 2  # assuming line 3 (0-based index)
+    line_text = editor.getLine(line_number)
+
+    if "Policy Status:" in line_text:
+        new_line = "Policy Status: " + selected + "\n"
+        editor.replaceWholeLine(line_number, new_line)
+    else:
+        editor.appendText("\nPolicy Status: " + selected)
