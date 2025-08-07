@@ -21,7 +21,7 @@ def on_caret_or_edit(args):
     caret_line = editor.lineFromPosition(editor.getCurrentPos())
     line_text = editor.getLine(caret_line).strip()
 
-    if line_text.lower().startswith("policy status:"):
+    if line_text.lower().startswith("Policy Status:"):
         suffix = line_text[14:].strip()
         if not suffix and not handled_lines.get(caret_line, False):
             selected = ask_choice("Policy Status", "Please select Policy Status:", ['Active', 'Cancelled'])
