@@ -1,0 +1,108 @@
+from Npp import *
+import re
+
+# --- Example lookup table ---
+lookup_table = [
+    {"Code": "12", "State": "NY", "Session": "East"},
+    {"Code": "34", "State": "TX", "Session": "Texas"},
+    {"Code": "56", "State": "CA", "Session": "West"},
+    # Add your actual values here
+]
+
+line_business_options = [
+    "Artisan Contractor", "Auto Service & Repair", "Commercial Auto",
+    "Habitational", "Manufacturing", "Real Estate", "Restaurant",
+    "Retail", "Umbrella", "Wholesale Distribution"
+]
+
+def get_session_from_input(value):
+    value = value.strip()
+    for row in lookup_table:
+        if value.isdigit() and row['Code'] == value:
+            return row['Session']
+        elif value.isalpha() and row['State'].upper() == value.upper():
+            return row['Session']
+    return None
+
+def insert_or_replace_line(prefix, value, after_line):
+    for i in range(editor.getLineCount()):
+        if editor.getLine(i).startswith(prefix):
+            editor.replaceWholeLine(i, "{} {}\n".format(prefix, value))
+            return
+    editor.insertText(editor.positionFromLine(after_line + 1), "{} {}\n".format(prefix, value))
+
+def line_index(label):
+    lines = [editor.getLine(i).strip() for i in range(editor.getLineCount())]
+    return next((i for i, l in enumerate(lines) if l.startswith(label)), -1)
+
+def on_charadded(char):
+    lines = [editor.getLine(i).strip() for i in range(editor.getLineCount())]
+
+    policy_i = line_index("Policy:")
+    policy_val = lines[policy_i][len("Policy:"):].strip() if policy_i != -1 else ""
+
+    if policy_val:
+        if line_index("Policy Status:") == -1:
+            insert_or_replace_line("Policy Status:", "", policy_i)
+        if line_index("Line of Business:") == -1:
+            lob_line = "Line of Business: [Select from: {}]".format(", ".join(line_business_options))
+            editor.insertText(editor.positionFromLine(policy_i + 2), lob_line + "\n")
+        if line_index("Session:") == -1:
+            insert_or_replace_line("Session:", "", policy_i + 3)
+
+    session_i = line_index("Session:")
+    if session_i != -1:
+        session_line = lines[session_i]
+        session_input = session_line[len("Session:"):].strip()
+        if session_input and not session_line.endswith("]"):
+            resolved = get_session_from_input(session_input)
+            if resolved:
+                editor.replaceWholeLine(session_i, "Session: {} [{}]\n".format(session_input, resolved))
+
+    required = ["SR#", "Policy:", "Policy Status:", "Line of Business:", "Session:"]
+    all_ready = all(line_index(lbl) != -1 and lines[line_index(lbl)].split(":", 1)[-1].strip() for lbl in required)
+
+    if all_ready and line_index("1. Who is requesting?") == -1:
+        editor.insertText(editor.getLength(),
+            "\n1. Who is requesting? \n- Type: [Agent / Agency Rep / Insured]\n\n"
+            "2. What is being requested?\n\n"
+            "3. Is this an Endorsement or a BO/RI?\n\n"
+            "4. What is the Effective Date?\n"
+            "5. Does it make sense?\n"
+        )
+
+    type_i = line_index("- Type:")
+    if type_i != -1:
+        type_val = lines[type_i].split(":", 1)[-1].strip()
+        if type_val in ["Agent", "Agency Rep"] and line_index("- Licensed:") == -1:
+            editor.insertText(editor.positionFromLine(type_i + 1), "- Licensed: [Yes / No]\n")
+
+    q1_i = line_index("1. Who is requesting?")
+    if q1_i != -1:
+        q1_line = lines[q1_i]
+        name_match = re.match(r"1\. Who is requesting\?\s+(.+?)(?:\s+-\s+.*)?$", q1_line)
+        if name_match:
+            name = name_match.group(1)
+            type_val = lines[type_i].split(":", 1)[-1].strip() if type_i != -1 else ""
+            lic_i = line_index("- Licensed:")
+            lic_val = lines[lic_i].split(":", 1)[-1].strip() if lic_i != -1 else ""
+
+            if type_val == "Agent":
+                suffix = " - Licensed Agent" if lic_val == "Yes" else " - Agent"
+            elif type_val == "Agency Rep":
+                suffix = " - Licensed Agency Rep" if lic_val == "Yes" else " - Agency Rep"
+            elif type_val == "Insured":
+                suffix = " - Insured"
+            else:
+                suffix = ""
+
+            editor.replaceWholeLine(q1_i, "1. Who is requesting? {}{}\n".format(name, suffix))
+
+def on_bufferactivated(args):
+    editor.callback(on_charadded, [SCINTILLANOTIFICATION.CHARADDED])
+
+# Initialize form content
+editor.setText("SR# \n\nPolicy: \n")
+
+notepad.callback(on_bufferactivated, [NOTIFICATION.BUFFERACTIVATED])
+editor.callback(on_charadded, [SCINTILLANOTIFICATION.CHARADDED])
