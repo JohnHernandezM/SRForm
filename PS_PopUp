@@ -3,10 +3,10 @@ import tkSimpleDialog
 import tkMessageBox
 from Npp import *
 
-# Track if popup already shown on a line
+# Keep track of handled lines by (type, line number)
 handled_lines = {}
 
-# Define dropdown options
+# Dropdown options
 status_options = ['Active', 'Inactive']
 lob_options = [
     'Artisan Contractor', 'Auto Service & Repair', 'Commercial Auto',
@@ -14,18 +14,6 @@ lob_options = [
     'Retail', 'Umbrella', 'Wholesale'
 ]
 
-# Inject the SR block when script is run
-def insert_form():
-    form = (
-        "SR# \n\n"
-        "Policy:\n"
-        "Policy Status:\n"
-        "Line of Business:\n"
-        "Session:\n"
-    )
-    editor.insertText(editor.getCurrentPos(), form)
-
-# Ask dropdown via simple input dialog
 def ask_choice(title, message, choices):
     root = Tkinter.Tk()
     root.withdraw()
@@ -38,7 +26,17 @@ def ask_choice(title, message, choices):
             return response
         tkMessageBox.showerror("Invalid Input", "Please choose one of:\n" + '\n'.join(choices))
 
-# Respond to typing or caret movement
+def insert_form():
+    form = (
+        "SR# \n\n"
+        "Policy:\n"
+        "Policy Status:\n"
+        "Line of Business:\n"
+        "Session:\n"
+    )
+    # Insert at the very beginning of the file
+    editor.setText(form + editor.getText())
+
 def on_update(args):
     caret_line = editor.lineFromPosition(editor.getCurrentPos())
     line_text = editor.getLine(caret_line).strip()
@@ -61,13 +59,13 @@ def on_update(args):
                 editor.replaceWholeLine(caret_line, "Line of Business: " + selected + "\n")
                 handled_lines[('lob', caret_line)] = True
 
-# --- INITIALIZATION ---
+# --- MAIN ENTRY POINT ---
 
-# Clear previous triggers and callbacks
+# Clear existing update triggers
 notepad.clearCallbacks([NOTIFICATION.UPDATEUI])
 
-# Insert form block
+# Insert the SR form
 insert_form()
 
-# Attach the real-time event listener
+# Attach the update listener (real-time caret/typing)
 notepad.callback(on_update, [NOTIFICATION.UPDATEUI])
