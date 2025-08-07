@@ -1,12 +1,9 @@
-import Tkinter
-import tkSimpleDialog
-import tkMessageBox
+import tkinter as tk
+from tkinter import simpledialog, messagebox
 from Npp import *
 
-# Keep track of handled lines by (type, line number)
 handled_lines = {}
 
-# Dropdown options
 status_options = ['Active', 'Inactive']
 lob_options = [
     'Artisan Contractor', 'Auto Service & Repair', 'Commercial Auto',
@@ -15,16 +12,16 @@ lob_options = [
 ]
 
 def ask_choice(title, message, choices):
-    root = Tkinter.Tk()
+    root = tk.Tk()
     root.withdraw()
     while True:
-        response = tkSimpleDialog.askstring(title, message + "\nOptions:\n" + '\n'.join(choices))
+        response = simpledialog.askstring(title, message + "\nOptions:\n" + '\n'.join(choices))
         if response is None:
             return None
         response = response.strip()
         if response in choices:
             return response
-        tkMessageBox.showerror("Invalid Input", "Please choose one of:\n" + '\n'.join(choices))
+        messagebox.showerror("Invalid Input", "Please choose one of:\n" + '\n'.join(choices))
 
 def insert_form():
     form = (
@@ -34,14 +31,12 @@ def insert_form():
         "Line of Business:\n"
         "Session:\n"
     )
-    # Insert at the very beginning of the file
-    editor.setText(form + editor.getText())
+    editor.insertText(0, form)
 
 def on_update(args):
     caret_line = editor.lineFromPosition(editor.getCurrentPos())
     line_text = editor.getLine(caret_line).strip()
 
-    # POLICY STATUS
     if line_text.lower().startswith("policy status:"):
         suffix = line_text[14:].strip()
         if not suffix and not handled_lines.get(('status', caret_line), False):
@@ -50,7 +45,6 @@ def on_update(args):
                 editor.replaceWholeLine(caret_line, "Policy Status: " + selected + "\n")
                 handled_lines[('status', caret_line)] = True
 
-    # LINE OF BUSINESS
     elif line_text.lower().startswith("line of business:"):
         suffix = line_text[17:].strip()
         if not suffix and not handled_lines.get(('lob', caret_line), False):
@@ -59,13 +53,7 @@ def on_update(args):
                 editor.replaceWholeLine(caret_line, "Line of Business: " + selected + "\n")
                 handled_lines[('lob', caret_line)] = True
 
-# --- MAIN ENTRY POINT ---
-
-# Clear existing update triggers
+# Clear any old triggers and start clean
 notepad.clearCallbacks([NOTIFICATION.UPDATEUI])
-
-# Insert the SR form
 insert_form()
-
-# Attach the update listener (real-time caret/typing)
 notepad.callback(on_update, [NOTIFICATION.UPDATEUI])
