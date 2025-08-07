@@ -1,72 +1,73 @@
-import tkinter as tk
-from tkinter import simpledialog, messagebox
-from Npp import *
+# -*- coding: utf-8 -*-
+# For Notepad++ PythonScript 2.1.0.0, Python 2.7
 
-# Track which lines already handled
-handled_lines = {}
+from Npp import notepad, editor
 
-# Dropdown options
-status_options = ['Active', 'Inactive']
-lob_options = [
-    'Artisan Contractor', 'Auto Service & Repair', 'Commercial Auto',
-    'Habitational', 'Manufacturing', 'Real Estate', 'Restaurant',
-    'Retail', 'Umbrella', 'Wholesale'
+# Insert template
+template_lines = [
+    "SR#",
+    "",
+    "Policy:",
+    "Policy Status:",
+    "Line of Business:",
+    "Session:",
+    ""
 ]
 
-# Show dropdown-like popup
-def ask_choice(title, message, choices):
-    root = tk.Tk()
-    root.withdraw()
-    while True:
-        response = simpledialog.askstring(title, message + "\n\nOptions:\n" + '\n'.join(choices))
-        if response is None:
-            return None
-        response = response.strip()
-        if response in choices:
-            return response
-        messagebox.showerror("Invalid Input", "Please choose one of:\n" + '\n'.join(choices))
+editor.setText('\n'.join(template_lines))
 
-# Insert the form at the caret position
-def insert_form():
-    form = (
-        "SR# \n\n"
-        "Policy:\n"
-        "Policy Status:\n"
-        "Line of Business:\n"
-        "Session:\n"
+# Move cursor to Policy Status line
+policy_status_line = 3  # 0-based index
+editor.gotoLine(policy_status_line)
+
+# Dropdown 1: Policy Status
+policy_status_options = ["Active", "Inactive"]
+policy_status_menu = "\n".join(
+    ["%d. %s" % (i + 1, opt) for i, opt in enumerate(policy_status_options)]
+)
+while True:
+    policy_status_choice = notepad.prompt(
+        "Select Policy Status:\n" + policy_status_menu, "Policy Status"
     )
-    editor.insertText(editor.getCurrentPos(), form)
+    if policy_status_choice and policy_status_choice.strip().isdigit():
+        idx = int(policy_status_choice.strip()) - 1
+        if 0 <= idx < len(policy_status_options):
+            policy_status_value = policy_status_options[idx]
+            break
+    notepad.messageBox("Invalid selection. Please enter 1 or 2.", "Error")
 
-# Watch for typing or caret movement
-def on_update(args):
-    caret_line = editor.lineFromPosition(editor.getCurrentPos())
-    line_text = editor.getLine(caret_line).strip()
+# Replace Policy Status line
+editor.replaceWholeLine(policy_status_line, "Policy Status: %s\n" % policy_status_value)
 
-    # POLICY STATUS
-    if line_text.lower().startswith("policy status:"):
-        suffix = line_text[14:].strip()
-        if not suffix and not handled_lines.get(('status', caret_line), False):
-            selected = ask_choice("Policy Status", "Select Policy Status:", status_options)
-            if selected:
-                editor.replaceWholeLine(caret_line, "Policy Status: " + selected + "\n")
-                handled_lines[('status', caret_line)] = True
+# Move cursor to Line of Business
+lob_line = 4  # 0-based index
+editor.gotoLine(lob_line)
 
-    # LINE OF BUSINESS
-    elif line_text.lower().startswith("line of business:"):
-        suffix = line_text[17:].strip()
-        if not suffix and not handled_lines.get(('lob', caret_line), False):
-            selected = ask_choice("Line of Business", "Select Line of Business:", lob_options)
-            if selected:
-                editor.replaceWholeLine(caret_line, "Line of Business: " + selected + "\n")
-                handled_lines[('lob', caret_line)] = True
+# Dropdown 2: Line of Business
+lob_options = [
+    "Artisan Contractor", "Auto Service & Repair", "Commercial Auto",
+    "Habitational", "Manufacturing", "Real Estate", "Restaurant",
+    "Retail", "Umbrella", "Wholesale"
+]
+lob_menu = "\n".join(
+    ["%d. %s" % (i + 1, opt) for i, opt in enumerate(lob_options)]
+)
+while True:
+    lob_choice = notepad.prompt(
+        "Select Line of Business:\n" + lob_menu, "Line of Business"
+    )
+    if lob_choice and lob_choice.strip().isdigit():
+        idx = int(lob_choice.strip()) - 1
+        if 0 <= idx < len(lob_options):
+            lob_value = lob_options[idx]
+            break
+    notepad.messageBox("Invalid selection. Please enter a number from 1 to 10.", "Error")
 
-# ---- MAIN ----
+# Replace Line of Business line
+editor.replaceWholeLine(lob_line, "Line of Business: %s\n" % lob_value)
 
-# Clear any previous triggers
-notepad.clearCallbacks([NOTIFICATION.UPDATEUI])
+# Move cursor to Session (optional: for your workflow)
+session_line = 5
+editor.gotoLine(session_line)
 
-# Insert the form
-insert_form()
-
-# Start monitoring for typing/caret changes
-notepad.callback(on_update, [NOTIFICATION.UPDATEUI])
+notepad.messageBox("Form created and filled!", "Done")
