@@ -40,6 +40,9 @@ Private IncLimits_Ans_Add As String    ' "C15" (normal) or "C17" (shifted)
 Private PremiumDisc_Ans_Add As String  ' "C18" (normal) or "C20" (shifted)
 
 Private Sub Worksheet_Change(ByVal Target As Range)
+    ' Ensure date-entry cells are treated as text (prevents Excel auto-coercion)
+    Ensure_DateCells_TextFormat
+
     ' Keep dynamic address variables in sync with current layout
     UpdateAddress_DynamicVars
 
@@ -176,6 +179,7 @@ End Function
 ' Set_ExtraRows — normalize inserted rows:
 ' - Set labels (B10:B11) using RefFormat_Header_Add formatting
 ' - Clear/format C10:C11 answers using RefFormat_Answer_Add formatting
+' - Force C10:C11 to Text format ("@") to prevent auto-date coercion
 '-----------------------------
 Private Sub Set_ExtraRows()
     ' Labels (B10:B11)
@@ -184,13 +188,14 @@ Private Sub Set_ExtraRows()
     Me.Range(IncludeJobFrom_Lbl_Add).Value = "From:"
     Me.Range(IncludeJobTo_Lbl_Add).Value = "To:"
 
-    ' Answer date cells (C10:C11) - clear and apply answer formatting, remove any DV
+    ' Answer date cells (C10:C11) - clear and apply answer formatting, remove any DV, force Text
     With IncludeJob_Y_DatesRange()
         .ClearContents
         On Error Resume Next
         .Validation.Delete
         On Error GoTo 0
         CopyFormats FromCell:=Me.Range(RefFormat_Answer_Add), ToRange:=.Cells
+        .NumberFormat = "@"
     End With
 End Sub
 
@@ -204,7 +209,21 @@ Private Sub CopyFormats(ByVal FromCell As Range, ByVal ToRange As Range)
 End Sub
 
 '-----------------------------
-' Apply_NumericValidation_WaiverFactors — numbers-only DV on active block (no alerts/popups)
+' Ensure_DateCells_TextFormat — keep date-entry cells as Text to avoid auto-coercion
+' - C5 always
+' - C10:C11 when extra rows are present
+'-----------------------------
+Private Sub Ensure_DateCells_TextFormat()
+    On Error Resume Next
+    Me.Range(EffectiveDate_Ans_Add).NumberFormat = "@"
+    If Check_ExtraRowsPresent() Then
+        Me.Range(IncludeJobFrom_Ans_Add & ":" & IncludeJobTo_Ans_Add).NumberFormat = "@"
+    End If
+    On Error GoTo 0
+End Sub
+
+'-----------------------------
+' Apply_NumericValidation_WaiverFactors — numbers-only DV on active block (no alerts)
 ' Also requires > 0 (strictly positive). Errors are not shown (ShowError=False).
 '-----------------------------
 Private Sub Apply_NumericValidation_WaiverFactors()
@@ -461,7 +480,7 @@ Private Sub Validate_DateCell(ByVal c As Range)
     If Len(v) = 0 Then Exit Sub   ' allow blank
 
     Dim s As String
-    ' Prefer displayed text to catch Excel auto-parsed dates consistently
+    ' Use displayed text so we validate what the user typed (after Text format)
     s = CStr(c.Text)
 
     ' Basic length check
