@@ -4,8 +4,9 @@ Option Explicit
 Private Const IncludeJob_Ans_Add     As String = "C9"
 Private Const IncludeJobFrom_Lbl_Add As String = "B10"     ' label address: From:
 Private Const IncludeJobTo_Lbl_Add   As String = "B11"     ' label address: To:
-Private Const IncludeJobFrom_Ans_Add As String = "C10"     ' answer address: From date (MDY)
-Private Const IncludeJobTo_Ans_Add   As String = "C11"     ' answer address: To date (MDY)
+Private Const IncludeJobFrom_Ans_Add As String = "C10"     ' answer address: From date
+Private Const IncludeJobTo_Ans_Add   As String = "C11"     ' answer address: To date
+Private Const EffectiveDate_Ans_Add  As String = "C5"      ' answer address: Effective date
 
 '=== Base rows for calculations (top row of active data block) ===
 Private Const Normal_BaseRow         As Long = 12          ' first row of data block in normal layout
@@ -45,38 +46,51 @@ Private Sub Worksheet_Change(ByVal Target As Range)
     ' 1) IncludeJob (C9) changed → handle structure and DV, then recalc
     If Not Intersect(Target, Me.Range(IncludeJob_Ans_Add)) Is Nothing Then
         Handle_IncludeJob
-        ' After structural change, refresh addresses/values and compute
         UpdateAddress_DynamicVars
         UpdateValues_AllVars
         Compute_WaiverCharge
         Exit Sub
     End If
 
-    ' 2) If IncLimits input address changed (C15 normal / C17 shifted) and > 1 → show Proceed/Edit popup
-    If Not Intersect(Target, Me.Range(IncLimits_Ans_Add)) Is Nothing Then Handle_IncLimits Me.Range(IncLimits_Ans_Add)
-
-    ' 2b) From/To date validation (only when extra rows exist and either C10 or C11 changed)
+    ' 1b) Per-cell DATE validation: C5 always; C10/C11 only when shown
+    Dim watchDate As Range, hit As Range, c As Range
+    ' C5
+    Set watchDate = Me.Range(EffectiveDate_Ans_Add)
+    Set hit = Intersect(Target, watchDate)
+    If Not hit Is Nothing Then
+        For Each c In hit.Cells
+            Validate_DateCell c
+        Next c
+    End If
+    ' C10:C11 when extra rows are present
     If Check_ExtraRowsPresent() Then
-        Dim dateWatch As Range
-        Set dateWatch = Me.Range(IncludeJobFrom_Ans_Add & ":" & IncludeJobTo_Ans_Add)
-        If Not Intersect(Target, dateWatch) Is Nothing Then
-            Validate_IncludeJob_Dates
+        Set watchDate = Me.Range(IncludeJobFrom_Ans_Add & ":" & IncludeJobTo_Ans_Add)
+        Set hit = Intersect(Target, watchDate)
+        If Not hit Is Nothing Then
+            For Each c In hit.Cells
+                Validate_DateCell c
+            Next c
         End If
     End If
 
+    ' 2) If IncLimits input address changed (C15 normal / C17 shifted) and > 1 → show Proceed/Edit popup
+    If Not Intersect(Target, Me.Range(IncLimits_Ans_Add)) Is Nothing Then
+        Handle_IncLimits Me.Range(IncLimits_Ans_Add)
+    End If
+
     ' 3) Numeric data block edits (Normal/Shifted)
-    Dim dataWatch As Range, hit As Range
+    Dim dataWatch As Range, hitNum As Range
     If Check_ExtraRowsPresent() Then
         Set dataWatch = Shifted_DataRange()
     Else
         Set dataWatch = Normal_DataRange()
     End If
 
-    Set hit = Intersect(Target, dataWatch)
-    If hit Is Nothing Then Exit Sub
+    Set hitNum = Intersect(Target, dataWatch)
+    If hitNum Is Nothing Then Exit Sub
 
     ' Enforce numeric-only and > 0 silently, then refresh values and compute
-    Handle_DataChange hit
+    Handle_DataChange hitNum
     UpdateValues_AllVars
     Compute_WaiverCharge
 End Sub
@@ -191,7 +205,7 @@ End Sub
 
 '-----------------------------
 ' Apply_NumericValidation_WaiverFactors — numbers-only DV on active block (no alerts/popups)
-' Now also requires > 0 (strictly positive). Errors are not shown (ShowError=False).
+' Also requires > 0 (strictly positive). Errors are not shown (ShowError=False).
 '-----------------------------
 Private Sub Apply_NumericValidation_WaiverFactors()
     Dim rng As Range
@@ -346,7 +360,7 @@ Private Sub UpdateValues_AllVars()
     CCRate_Ans_Val   = Convert_Numeric_Double(Me.Range(CCRate_Ans_Add).Value2)
     Payroll_Ans_Val  = Convert_Numeric_Double(Me.Range(Payroll_Ans_Add).Value2)
 
-    ' Others by offset within active block
+    ' Others by offset within active data block
     CC_Ans_Val          = Convert_Numeric_Double(Me.Cells(baseRow + 0, Answer_Col).Value2)
     ExMod_Ans_Val       = Convert_Numeric_Double(Me.Cells(baseRow + 4, Answer_Col).Value2)
     SchMod_Ans_Val      = Convert_Numeric_Double(Me.Cells(baseRow + 5, Answer_Col).Value2)
@@ -373,160 +387,6 @@ Private Sub UpdateValues_AllVars()
         pdRaw = Convert_Numeric_Double(Me.Range(PremiumDisc_Ans_Add).Value2)
         PremiumDisc_Ans_Val = 1# - pdRaw
     End If
-End Sub
-
-'-----------------------------
-' Validate_IncludeJob_Dates — strict MDY; only digits + "/" or "-" (no spaces)
-' - Accepts m/d/yy, m/d/yyyy, m/dd/yy, m/dd/yyyy, mm/d/yy, mm/d/yyyy, mm/dd/yy, mm/dd/yyyy
-' - Validates only when both cells parse
-' - Allows C10 = C11; if C10 > C11 → popup + clear both
-' - If a TEXT entry has spaces or invalid characters, that cell is cleared silently
-' - If Excel already stored a numeric date, we accept it directly (locale-agnostic)
-'-----------------------------
-Private Sub Validate_IncludeJob_Dates()
-    Dim fromCell As Range, toCell As Range
-    Set fromCell = Me.Range(IncludeJobFrom_Ans_Add)
-    Set toCell = Me.Range(IncludeJobTo_Ans_Add)
-
-    Dim vFrom As Variant, vTo As Variant
-    vFrom = fromCell.Value2
-    vTo = toCell.Value2
-
-    If Len(vFrom) = 0 Or Len(vTo) = 0 Then Exit Sub
-
-    Dim dFrom As Date, dTo As Date
-    If Not TryGetMDYDate(vFrom, fromCell, dFrom) Then Exit Sub
-    If Not TryGetMDYDate(vTo, toCell, dTo) Then Exit Sub
-
-    If dFrom > dTo Then
-        MsgBox "The 'From' date (C10) cannot be later than the 'To' date (C11)." & vbCrLf & _
-               "Both values will be cleared.", vbExclamation, "Invalid date range"
-        Dim prev As Boolean
-        prev = Application.EnableEvents
-        Application.EnableEvents = False
-        fromCell.ClearContents
-        toCell.ClearContents
-        Application.EnableEvents = prev
-    End If
-End Sub
-
-' Returns True and sets d when v is a valid MDY date.
-' If v is numeric/date already, accept directly (locale-agnostic).
-' If v is text: must contain only digits and "/" or "-" (no spaces), and match the 8 MDY combos.
-Private Function TryGetMDYDate(ByVal v As Variant, ByVal c As Range, ByRef d As Date) As Boolean
-    On Error GoTo Fail
-    ' If Excel already parsed it (numeric serial or Date), accept directly
-    If IsDate(v) And VarType(v) <> vbString Then
-        d = CDate(v)
-        TryGetMDYDate = True
-        Exit Function
-    End If
-    If IsNumeric(v) And VarType(v) <> vbString Then
-        d = CDate(v)
-        TryGetMDYDate = True
-        Exit Function
-    End If
-
-    ' Otherwise treat as text and validate strictly
-    Dim s As String: s = CStr(v)
-    If InStr(s, " ") > 0 Then SilentClear c: Exit Function
-    If Not AllowedDateCharsOnly(s) Then SilentClear c: Exit Function
-
-    Dim ok As Boolean
-    ok = Parse_MDY_Date_Strict(s, d)
-    If Not ok Then SilentClear c
-    TryGetMDYDate = ok
-    Exit Function
-Fail:
-    TryGetMDYDate = False
-End Function
-
-'-----------------------------
-' AllowedDateCharsOnly — True if s contains only 0-9 or "/" or "-" (no spaces)
-'-----------------------------
-Private Function AllowedDateCharsOnly(ByVal s As String) As Boolean
-    Dim i As Long, ch As String
-    For i = 1 To Len(s)
-        ch = Mid$(s, i, 1)
-        Select Case ch
-            Case "0" To "9", "/", "-"
-                ' ok
-            Case Else
-                AllowedDateCharsOnly = False
-                Exit Function
-        End Select
-    Next i
-    AllowedDateCharsOnly = True
-End Function
-
-'-----------------------------
-' Parse_MDY_Date_Strict — accepts exactly the 8 MDY combos, separators "/" or "-"
-' - m or mm, d or dd, yy or yyyy
-' - Validates month/day ranges and guards against overflow (e.g., 2/30 invalid)
-' - Two-digit year mapping: 50–99 → 1950–1999; 00–49 → 2000–2049
-'-----------------------------
-Private Function Parse_MDY_Date_Strict(ByVal s As String, ByRef outDate As Date) As Boolean
-    On Error GoTo Fail
-
-    ' Count separators; require exactly 2, and separators may be "/" or "-"
-    Dim sepCount As Long, i As Long, ch As String
-    For i = 1 To Len(s)
-        ch = Mid$(s, i, 1)
-        If ch = "/" Or ch = "-" Then sepCount = sepCount + 1
-    Next
-    If sepCount <> 2 Then Exit Function
-
-    ' Normalize to "/"
-    Dim t As String
-    t = Replace$(s, "-", "/")
-
-    Dim parts() As String
-    parts = Split(t, "/")
-    If UBound(parts) <> 2 Then Exit Function
-
-    ' Enforce lengths: M(1-2), D(1-2), Y(2 or 4)
-    Dim pm As String, pd As String, py As String
-    pm = parts(0): pd = parts(1): py = parts(2)
-    If Len(pm) < 1 Or Len(pm) > 2 Then Exit Function
-    If Len(pd) < 1 Or Len(pd) > 2 Then Exit Function
-    If Not (Len(py) = 2 Or Len(py) = 4) Then Exit Function
-
-    ' Must be digits
-    If Not IsNumeric(pm) Or Not IsNumeric(pd) Or Not IsNumeric(py) Then Exit Function
-
-    Dim m As Long, d As Long, y As Long
-    m = CLng(pm): d = CLng(pd): y = CLng(py)
-    If m < 1 Or m > 12 Then Exit Function
-    If d < 1 Or d > 31 Then Exit Function
-
-    If Len(py) = 2 Then
-        If y >= 50 Then
-            y = 1900 + y
-        Else
-            y = 2000 + y
-        End If
-    End If
-
-    Dim dt As Date
-    dt = DateSerial(y, m, d)
-    If Month(dt) <> m Or Day(dt) <> d Or Year(dt) <> y Then Exit Function
-
-    outDate = dt
-    Parse_MDY_Date_Strict = True
-    Exit Function
-Fail:
-    Parse_MDY_Date_Strict = False
-End Function
-
-'-----------------------------
-' SilentClear — clear cell with events suppressed
-'-----------------------------
-Private Sub SilentClear(ByVal c As Range)
-    Dim prev As Boolean
-    prev = Application.EnableEvents
-    Application.EnableEvents = False
-    c.ClearContents
-    Application.EnableEvents = prev
 End Sub
 
 '-----------------------------
@@ -588,11 +448,64 @@ Private Function IncludeJob_Y_DatesRange() As Range
 End Function
 
 '-----------------------------
-' IncLimitsInputCell — returns the visible IncLimits input range (C15 normal / C17 shifted)
+' Validate_DateCell — per-cell input rules for dates (no popups; clear on failure)
+' Applies to: C5 always; C10/C11 only when shown
+' Rules:
+'   - length 6..10
+'   - digits and "/" or "-" only; no spaces; no letters
+'   - exactly two separators, and both the same (all "/" or all "-")
+'   - month: 1-2 digits; day: 1-2 digits; year: 2-4 digits
 '-----------------------------
-Private Function IncLimitsInputCell() As Range
-    If Len(IncLimits_Ans_Add) = 0 Then
-        UpdateAddress_DynamicVars
-    End If
-    Set IncLimitsInputCell = Me.Range(IncLimits_Ans_Add)
-End Function
+Private Sub Validate_DateCell(ByVal c As Range)
+    Dim v As Variant: v = c.Value2
+    If Len(v) = 0 Then Exit Sub   ' allow blank
+
+    Dim s As String
+    ' Prefer displayed text to catch Excel auto-parsed dates consistently
+    s = CStr(c.Text)
+
+    ' Basic length check
+    If Len(s) < 6 Or Len(s) > 10 Then GoTo ClearIt
+
+    ' No spaces; only digits and "/" or "-"
+    Dim i As Long, ch As String, sep As String, slashCnt As Long, dashCnt As Long
+    For i = 1 To Len(s)
+        ch = Mid$(s, i, 1)
+        Select Case ch
+            Case "0" To "9", "/", "-"
+                If ch = "/" Then slashCnt = slashCnt + 1
+                If ch = "-" Then dashCnt = dashCnt + 1
+            Case Else
+                GoTo ClearIt
+        End Select
+    Next i
+
+    ' Exactly 2 separators; must be all "/" or all "-"
+    If (slashCnt + dashCnt) <> 2 Then GoTo ClearIt
+    If Not (slashCnt = 2 And dashCnt = 0) And Not (dashCnt = 2 And slashCnt = 0) Then GoTo ClearIt
+    sep = IIf(slashCnt = 2, "/", "-")
+
+    ' Split and check part lengths
+    Dim parts() As String
+    parts = Split(s, sep)
+    If UBound(parts) <> 2 Then GoTo ClearIt
+
+    Dim pm As String, pd As String, py As String
+    pm = parts(0): pd = parts(1): py = parts(2)
+
+    If Len(pm) < 1 Or Len(pm) > 2 Then GoTo ClearIt
+    If Len(pd) < 1 Or Len(pd) > 2 Then GoTo ClearIt
+    If Len(py) < 2 Or Len(py) > 4 Then GoTo ClearIt
+
+    ' All numeric parts
+    If Not (IsNumeric(pm) And IsNumeric(pd) And IsNumeric(py)) Then GoTo ClearIt
+
+    Exit Sub
+
+ClearIt:
+    Dim prev As Boolean
+    prev = Application.EnableEvents
+    Application.EnableEvents = False
+    c.ClearContents
+    Application.EnableEvents = prev
+End Sub
