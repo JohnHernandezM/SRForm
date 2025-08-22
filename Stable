@@ -45,7 +45,6 @@ Private Sub Worksheet_Change(ByVal Target As Range)
     ' 1) IncludeJob (C9) changed → handle structure and DV, then recalc
     If Not Intersect(Target, Me.Range(IncludeJob_Ans_Add)) Is Nothing Then
         Handle_IncludeJob
-        ' After structural change, refresh addresses/values and compute
         UpdateAddress_DynamicVars
         UpdateValues_AllVars
         Compute_WaiverCharge
@@ -53,7 +52,9 @@ Private Sub Worksheet_Change(ByVal Target As Range)
     End If
 
     ' 2) If IncLimits input address changed (C15 normal / C17 shifted) and > 1 → show Proceed/Edit popup
-    If Not Intersect(Target, Me.Range(IncLimits_Ans_Add)) Is Nothing Then Handle_IncLimits Me.Range(IncLimits_Ans_Add)
+    If Not Intersect(Target, Me.Range(IncLimits_Ans_Add)) Is Nothing Then
+        Handle_IncLimits Me.Range(IncLimits_Ans_Add)
+    End If
 
     ' 3) Numeric data block edits (Normal/Shifted)
     Dim dataWatch As Range, hit As Range
@@ -66,7 +67,7 @@ Private Sub Worksheet_Change(ByVal Target As Range)
     Set hit = Intersect(Target, dataWatch)
     If hit Is Nothing Then Exit Sub
 
-    ' Enforce numeric-only silently, then refresh values and compute
+    ' Enforce numeric-only and > 0 silently, then refresh values and compute
     Handle_DataChange hit
     UpdateValues_AllVars
     Compute_WaiverCharge
@@ -182,6 +183,7 @@ End Sub
 
 '-----------------------------
 ' Apply_NumericValidation_WaiverFactors — numbers-only DV on active block (no alerts/popups)
+' Also requires > 0 (strictly positive). Errors are not shown (ShowError=False).
 '-----------------------------
 Private Sub Apply_NumericValidation_WaiverFactors()
     Dim rng As Range
@@ -195,10 +197,11 @@ Private Sub Apply_NumericValidation_WaiverFactors()
 
     With rng.Validation
         .Delete
-        .Add Type:=xlValidateDecimal, Operator:=xlBetween, Formula1:="-1E+308", Formula2:="1E+308"
+        ' Require decimal > 0
+        .Add Type:=xlValidateDecimal, Operator:=xlGreater, Formula1:="0"
         .IgnoreBlank = True
         .InCellDropdown = False
-        ' Intentionally no ErrorTitle/ErrorMessage/AlertStyle/ShowError
+        .ShowError = False
     End With
 End Sub
 
@@ -217,24 +220,28 @@ End Sub
 ' - Allows blanks
 ' - Converts numeric strings to numbers
 ' - Clears non-numeric entries
+' - Enforces > 0: negatives cleared; zero cleared
 '-----------------------------
 Private Sub Handle_DataChange(ByVal rngChanged As Range)
     On Error GoTo CleanExit
     Application.EnableEvents = False
 
-    Dim c As Range, v
+    Dim c As Range, v As Variant, d As Double
     For Each c In rngChanged.Cells
         v = c.Value2
         If Len(v) = 0 Then
             ' allow blanks
         ElseIf IsNumeric(v) Then
-            If VarType(v) = vbString Then
+            d = CDbl(v)
+            If d <= 0# Then
+                c.ClearContents   ' zero or negative → clear
+            ElseIf VarType(v) = vbString Then
                 On Error Resume Next
-                c.Value = CDbl(v)
+                c.Value = d       ' coerce numeric string to number
                 On Error GoTo 0
             End If
         Else
-            c.ClearContents
+            c.ClearContents       ' non-numeric → clear
         End If
     Next c
 
@@ -266,7 +273,7 @@ Private Sub Handle_IncLimits(ByVal incCell As Range)
 
     If Not f.ChosenProceed Then
         Application.EnableEvents = False
-        incCell.ClearContents  ' treat as blank; next UpdateValues_AllVars sets IncLimits_Ans_Val = 1 via Convert_Numeric_Double
+        incCell.ClearContents
         Application.EnableEvents = True
     End If
 
@@ -331,13 +338,13 @@ Private Sub UpdateValues_AllVars()
     CCRate_Ans_Val   = Convert_Numeric_Double(Me.Range(CCRate_Ans_Add).Value2)
     Payroll_Ans_Val  = Convert_Numeric_Double(Me.Range(Payroll_Ans_Add).Value2)
 
-    ' Others by offset within active block
+    ' Others by offset within active data block
     CC_Ans_Val          = Convert_Numeric_Double(Me.Cells(baseRow + 0, Answer_Col).Value2)
     ExMod_Ans_Val       = Convert_Numeric_Double(Me.Cells(baseRow + 4, Answer_Col).Value2)
     SchMod_Ans_Val      = Convert_Numeric_Double(Me.Cells(baseRow + 5, Answer_Col).Value2)
     TierFactor_Ans_Val  = Convert_Numeric_Double(Me.Cells(baseRow + 7, Answer_Col).Value2)
 
-    ' IncLimits (raw → adjusted) using its dynamic address
+    ' IncLimits (raw → adjusted)
     Dim incRaw As Double
     If Len(Me.Range(IncLimits_Ans_Add).Value2) = 0 Then
         IncLimits_Ans_Val = 1#
@@ -346,11 +353,11 @@ Private Sub UpdateValues_AllVars()
         If incRaw < 1# Then
             IncLimits_Ans_Val = 1# + incRaw
         Else
-            IncLimits_Ans_Val = incRaw   ' persists only if user clicked Proceed (else address was cleared)
+            IncLimits_Ans_Val = incRaw
         End If
     End If
 
-    ' PremiumDisc (raw → adjusted) using its dynamic address
+    ' PremiumDisc (raw → adjusted)
     Dim pdRaw As Double
     If Len(Me.Range(PremiumDisc_Ans_Add).Value2) = 0 Then
         PremiumDisc_Ans_Val = 1#
@@ -359,29 +366,6 @@ Private Sub UpdateValues_AllVars()
         PremiumDisc_Ans_Val = 1# - pdRaw
     End If
 End Sub
-
-'-----------------------------
-' Convert_Numeric_Double — convert to Double; blanks/non-numeric → default (1 by default)
-'-----------------------------
-Private Function Convert_Numeric_Double(ByVal v As Variant, Optional ByVal defaultVal As Double = 1#) As Double
-    If IsError(v) Then
-        Convert_Numeric_Double = defaultVal
-    ElseIf IsEmpty(v) Then
-        Convert_Numeric_Double = defaultVal
-    ElseIf VarType(v) = vbString Then
-        If Trim$(v) = vbNullString Then
-            Convert_Numeric_Double = defaultVal
-        ElseIf IsNumeric(v) Then
-            Convert_Numeric_Double = CDbl(v)
-        Else
-            Convert_Numeric_Double = defaultVal
-        End If
-    ElseIf IsNumeric(v) Then
-        Convert_Numeric_Double = CDbl(v)
-    Else
-        Convert_Numeric_Double = defaultVal
-    End If
-End Function
 
 '-----------------------------
 ' Normal_DataRange — Answer_Col & Normal_BaseRow : Answer_Col & (Normal_BaseRow + WaiverFactors_Height - 1)
@@ -416,14 +400,4 @@ End Function
 '-----------------------------
 Private Function IncludeJob_Y_DatesRange() As Range
     Set IncludeJob_Y_DatesRange = Me.Range(IncludeJobFrom_Ans_Add & ":" & IncludeJobTo_Ans_Add)
-End Function
-
-'-----------------------------
-' IncLimitsInputCell — returns the visible IncLimits input range (C15 normal / C17 shifted)
-'-----------------------------
-Private Function IncLimitsInputCell() As Range
-    If Len(IncLimits_Ans_Add) = 0 Then
-        UpdateAddress_DynamicVars
-    End If
-    Set IncLimitsInputCell = Me.Range(IncLimits_Ans_Add)
 End Function
