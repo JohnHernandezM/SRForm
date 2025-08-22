@@ -2,8 +2,6 @@ Option Explicit
 
 '=== Address / position aliases ===
 Private Const IncludeJob_Answer       As String = "C9"
-Private Const NewRows                 As String = "10:11"   ' rows to insert/delete
-Private Const ShiftedHeaderPos        As Long   = 13        ' table header row when shifted
 Private Const IncludeJobFrom_Label    As String = "B10"     ' label cell: From:
 Private Const IncludeJobTo_Label      As String = "B11"     ' label cell: To:
 Private Const IncludeJobFrom_Answer   As String = "C10"     ' answer cell: From date
@@ -16,7 +14,6 @@ Private Const ShiftedBaseRow          As Long = 14          ' first row of data 
 '=== Format anchors ===
 Private Const ReferenceFormat_Header  As String = "B5"      ' reference cell for header formatting
 Private Const ReferenceFormat_Answer  As String = "C5"      ' reference cell for answer formatting
-Private Const IncludeJobDates         As String = "C10:C11" ' range for From/To job dates (only present if YES in C9)
 
 '=== Column reference ===
 Private Const AnswerColumn            As String = "C"       ' all answers are in this column
@@ -76,16 +73,17 @@ Private Sub HandleC9Toggle()
     Select Case newVal
         Case "YES"
             If Not haveExtra Then
-                Me.Rows(NewRows).Insert Shift:=xlDown, CopyOrigin:=xlFormatFromLeftOrAbove
+                JobRowsRange().Insert Shift:=xlDown, CopyOrigin:=xlFormatFromLeftOrAbove
             End If
             SetupExtraRows
             ApplyNumericValidationToCurrentDataBlock
 
         Case "NO", vbNullString
             If haveExtra Then
-                Me.Rows(NewRows).Delete Shift:=xlUp
+                JobRowsRange().Delete Shift:=xlUp
             End If
             ApplyNumericValidationToCurrentDataBlock
+
         Case Else
             ' ignore
     End Select
@@ -99,29 +97,32 @@ CleanExit:
 End Sub
 
 '-----------------------------
-' Detect whether extra rows (10:11) are present
+' Detect whether extra rows are present
+'   True  -> header row pushed down to ShiftedBaseRow - 1
+'   False -> header row at baseline (NormalBaseRow - 1)
 '-----------------------------
 Private Function ExtraRowsPresent() As Boolean
     On Error GoTo FailSafe
     Dim lo As ListObject
     Set lo = Me.ListObjects("Calculator")
-    ExtraRowsPresent = (lo.HeaderRowRange.Row = ShiftedHeaderPos)
+    ExtraRowsPresent = (lo.HeaderRowRange.Row = (ShiftedBaseRow - 1))
     Exit Function
 FailSafe:
     ExtraRowsPresent = False
 End Function
 
 '-----------------------------
-' Normalize newly added rows
+' Normalize newly added rows (labels and formats; clear any DV)
 '-----------------------------
 Private Sub SetupExtraRows()
-    ' Labels
-    CopyFormats FromCell:=Me.Range(ReferenceFormat_Header), ToRange:=Me.Range(IncludeJobFrom_Label & ":" & IncludeJobTo_Label)
+    ' Labels (B10:B11)
+    CopyFormats FromCell:=Me.Range(ReferenceFormat_Header), _
+                ToRange:=Me.Range(IncludeJobFrom_Label & ":" & IncludeJobTo_Label)
     Me.Range(IncludeJobFrom_Label).Value = "From:"
     Me.Range(IncludeJobTo_Label).Value = "To:"
 
-    ' Date inputs (reset contents and formatting; no DV or validation here)
-    With Me.Range(IncludeJobDates)
+    ' Answer date cells (C10:C11) - clear and apply answer formatting, remove any DV
+    With JobDatesRange()
         .ClearContents
         On Error Resume Next
         .Validation.Delete
@@ -248,4 +249,18 @@ Private Function ShiftedDataRange() As Range
     Set ShiftedDataRange = Me.Range( _
         AnswerColumn & ShiftedBaseRow & ":" & _
         AnswerColumn & (ShiftedBaseRow + DataBlockHeight - 1))
+End Function
+
+'-----------------------------
+' Helpers to build job rows/dates ranges dynamically
+'-----------------------------
+Private Function JobRowsRange() As Range
+    Dim r1 As Long, r2 As Long
+    r1 = Me.Range(IncludeJobFrom_Label).Row
+    r2 = Me.Range(IncludeJobTo_Label).Row
+    Set JobRowsRange = Me.Rows(CStr(r1) & ":" & CStr(r2))
+End Function
+
+Private Function JobDatesRange() As Range
+    Set JobDatesRange = Me.Range(IncludeJobFrom_Answer & ":" & IncludeJobTo_Answer)
 End Function
