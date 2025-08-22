@@ -1,5 +1,5 @@
 '==========================
-' Build Comment – C9 = No
+' Build Comment – CASE 1 (C9 = No or blank)
 '==========================
 Private Const WOS_Texas As Double = 0.05   ' 5% charge multiplier (final step only)
 
@@ -17,7 +17,7 @@ Public Sub Build_Comment()
     c9 = UCase$(Trim$(ws.Range("C9").Value2))
 
     If c9 = "YES" Then
-        ' SECOND CASE not implemented yet (per your note) — bail out gracefully
+        ' CASE 2 will be added later
         MsgBox "The 'Include Job = Yes' case will be implemented next.", vbInformation, "Build Comment"
         Exit Sub
     End If
@@ -80,7 +80,7 @@ Public Sub Build_Comment()
 
     If IsNonBlank(ws.Range("C18")) Then
         Dim pdRaw As Double
-        pdRaw = Convert_Numeric_Double(ws.Range("C18").Value2, 0#) ' already constrained to (0,1) by your validation
+        pdRaw = Convert_Numeric_Double(ws.Range("C18").Value2, 0#) ' already constrained to (0,1)
         WaiverAmount = WaiverAmount_Old * PremiumDisc_Ans_Val
         s = s & " x " & FmtDec3(PremiumDisc_Ans_Val) & _
                 " (Premium Discount: 1.00 - " & FmtDec3(pdRaw) & " = " & FmtDec3(PremiumDisc_Ans_Val) & ") = " & FmtDec3(WaiverAmount)
@@ -99,10 +99,6 @@ Public Sub Build_Comment()
 
     ' Copy to clipboard (MSForms.DataObject, late bound)
     CopyTextToClipboard s
-
-    ' Optional: user feedback (non-blocking status bar)
-    ' Application.StatusBar = "Build Comment: copied to clipboard."
-    ' (Set Application.StatusBar = False elsewhere to clear, if you use this.)
 End Sub
 
 '==========================
@@ -162,26 +158,29 @@ Private Sub CopyTextToClipboard(ByVal txt As String)
 End Sub
 
 '==========================
-' (Optional) Installer: creates a Shape over B2, labels it, and wires the macro
+' Installer: creates a rounded button across B2:C2 and wires the macro
 '==========================
 Public Sub Install_BuildComment_Button()
-    Dim r As Range: Set r = Me.Range("B2")
+    Dim target As Range: Set target = Me.Range("B2:C2")
     Dim shp As Shape
-    Dim nm As String: nm = "Build Comment"
+    Const nm As String = "Build Comment"
 
     ' Remove existing with same name
     On Error Resume Next
     Me.Shapes(nm).Delete
     On Error GoTo 0
 
-    ' Create the button as a rounded rectangle sitting exactly on cell B2
+    ' Create the button
     Set shp = Me.Shapes.AddShape(Type:=msoShapeRoundedRectangle, _
-                                 Left:=r.Left, Top:=r.Top, Width:=r.Width, Height:=r.Height)
+                                 Left:=target.Left, Top:=target.Top, _
+                                 Width:=target.Width, Height:=target.Height)
     With shp
         .Name = nm
         .TextFrame.Characters.Text = "Build Comment"
         .TextFrame.HorizontalAlignment = xlHAlignCenter
         .TextFrame.VerticalAlignment = xlVAlignCenter
+        .Placement = xlMoveAndSize
+        .ZOrder msoBringToFront
         .OnAction = "'" & ThisWorkbook.Name & "'!" & Me.CodeName & ".Build_Comment"
     End With
 End Sub
