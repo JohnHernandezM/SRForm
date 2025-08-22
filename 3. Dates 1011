@@ -77,7 +77,7 @@ Private Sub Worksheet_Change(ByVal Target As Range)
                 Validate_DateCell c
                 Normalize_DateCellDisplay c
             Next c
-            ' After individual validation/normalization, enforce C11 >= C10
+            ' After individual validation/normalization, enforce C11 >= C10 (both must be non-blank)
             Validate_JobDateOrder
         End If
     End If
@@ -270,7 +270,7 @@ End Sub
 ' - Enforces > 0: negatives cleared; zero cleared
 '-----------------------------
 Private Sub Handle_DataChange(ByVal rngChanged As Range)
-    On Error Go To CleanExit
+    On Error GoTo CleanExit
     Application.EnableEvents = False
 
     Dim c As Range, v As Variant, d As Double
