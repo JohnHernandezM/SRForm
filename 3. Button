@@ -1,0 +1,187 @@
+'==========================
+' Build Comment – C9 = No
+'==========================
+Private Const WOS_Texas As Double = 0.05   ' 5% charge multiplier (final step only)
+
+' Public so it can be assigned to the button
+Public Sub Build_Comment()
+    Dim msg As String, missing As String
+    Dim ws As Worksheet: Set ws = Me
+
+    ' Always required
+    Dim reqAlways As Variant
+    reqAlways = Array("C4", "C5", "C7", "C9")
+    missing = MissingList(reqAlways)
+
+    Dim c9 As String
+    c9 = UCase$(Trim$(ws.Range("C9").Value2))
+
+    If c9 = "YES" Then
+        ' SECOND CASE not implemented yet (per your note) — bail out gracefully
+        MsgBox "The 'Include Job = Yes' case will be implemented next.", vbInformation, "Build Comment"
+        Exit Sub
+    End If
+
+    ' C9 = No (or blank): additional required
+    Dim reqNo As Variant
+    reqNo = Array("C12", "C13", "C14")
+    missing = AppendMissing(missing, MissingList(reqNo))
+
+    If Len(missing) > 0 Then
+        MsgBox "Cannot build the comment. The following required cells are missing:" & vbCrLf & missing, _
+               vbExclamation, "Build Comment"
+        Exit Sub
+    End If
+
+    ' Refresh dynamic addresses/values so *_Ans_Val variables are correct
+    UpdateAddress_DynamicVars
+    UpdateValues_AllVars
+
+    ' Read inputs
+    Dim sr As String: sr = CStr(ws.Range("C4").Value2)
+    Dim eff As String: eff = CStr(ws.Range("C5").Value2)
+    Dim namedIns As String: namedIns = CStr(ws.Range("C7").Value2)
+
+    Dim cls As String: cls = CStr(ws.Range("C12").Value2)
+    Dim rate As Double: rate = CDbl(ws.Range("C13").Value2)
+    Dim payroll As Double: payroll = CDbl(ws.Range("C14").Value2)
+
+    ' Base waiver amount (full precision; display rounded only)
+    Dim WaiverAmount As Double, WaiverAmount_Old As Double
+    WaiverAmount = payroll * rate / 100#
+    WaiverAmount_Old = WaiverAmount
+
+    ' Build base sentence
+    Dim s As String
+    s = "SR# " & sr & " - " & _
+        "Per Agent’s request, Added Specific Waiver of Subrogation with Effective Date: " & eff & _
+        " for " & namedIns & " | " & _
+        "Estimated Payroll: " & FmtCurrency0(payroll) & ", Class Code: " & cls & ", Class Code Rate: " & FmtDec3(rate) & " | " & _
+        FmtInt(payroll) & " x " & FmtDec3(rate) & " / 100 = " & FmtDec3(WaiverAmount)
+
+    ' Optional factors (append only if the cell is non-blank)
+    If IsNonBlank(ws.Range("C15")) Then
+        WaiverAmount = WaiverAmount_Old * IncLimits_Ans_Val
+        s = s & " x " & FmtDec3(IncLimits_Ans_Val) & " (Increased Limits) = " & FmtDec3(WaiverAmount)
+        WaiverAmount_Old = WaiverAmount
+    End If
+
+    If IsNonBlank(ws.Range("C16")) Then
+        WaiverAmount = WaiverAmount_Old * ExMod_Ans_Val
+        s = s & " x " & FmtDec3(ExMod_Ans_Val) & " (Experience Mod) = " & FmtDec3(WaiverAmount)
+        WaiverAmount_Old = WaiverAmount
+    End If
+
+    If IsNonBlank(ws.Range("C17")) Then
+        WaiverAmount = WaiverAmount_Old * SchMod_Ans_Val
+        s = s & " x " & FmtDec3(SchMod_Ans_Val) & " (Schedule Mod) = " & FmtDec3(WaiverAmount)
+        WaiverAmount_Old = WaiverAmount
+    End If
+
+    If IsNonBlank(ws.Range("C18")) Then
+        Dim pdRaw As Double
+        pdRaw = Convert_Numeric_Double(ws.Range("C18").Value2, 0#) ' already constrained to (0,1) by your validation
+        WaiverAmount = WaiverAmount_Old * PremiumDisc_Ans_Val
+        s = s & " x " & FmtDec3(PremiumDisc_Ans_Val) & _
+                " (Premium Discount: 1.00 - " & FmtDec3(pdRaw) & " = " & FmtDec3(PremiumDisc_Ans_Val) & ") = " & FmtDec3(WaiverAmount)
+        WaiverAmount_Old = WaiverAmount
+    End If
+
+    If IsNonBlank(ws.Range("C19")) Then
+        WaiverAmount = WaiverAmount_Old * TierFactor_Ans_Val
+        s = s & " x " & FmtDec3(TierFactor_Ans_Val) & " (Tier Factor) = " & FmtDec3(WaiverAmount)
+        WaiverAmount_Old = WaiverAmount
+    End If
+
+    ' Final WOS step (multiply by 5%) — show integer result
+    WaiverAmount = WaiverAmount_Old * WOS_Texas
+    s = s & " x 5% (WOS Charge) = " & CStr(Application.WorksheetFunction.Round(WaiverAmount, 0))
+
+    ' Copy to clipboard (MSForms.DataObject, late bound)
+    CopyTextToClipboard s
+
+    ' Optional: user feedback (non-blocking status bar)
+    ' Application.StatusBar = "Build Comment: copied to clipboard."
+    ' (Set Application.StatusBar = False elsewhere to clear, if you use this.)
+End Sub
+
+'==========================
+' Helpers
+'==========================
+Private Function IsNonBlank(ByVal r As Range) As Boolean
+    IsNonBlank = (Len(Trim$(CStr(r.Value2))) > 0)
+End Function
+
+Private Function MissingList(ByVal addrArr As Variant) As String
+    Dim i As Long, a As String, out As String
+    For i = LBound(addrArr) To UBound(addrArr)
+        a = CStr(addrArr(i))
+        If Len(Trim$(CStr(Me.Range(a).Value2))) = 0 Then
+            out = out & IIf(Len(out) > 0, vbCrLf, vbNullString) & a
+        End If
+    Next i
+    MissingList = out
+End Function
+
+Private Function AppendMissing(ByVal base As String, ByVal extra As String) As String
+    If Len(extra) = 0 Then
+        AppendMissing = base
+    ElseIf Len(base) = 0 Then
+        AppendMissing = extra
+    Else
+        AppendMissing = base & vbCrLf & extra
+    End If
+End Function
+
+' Up to 3 decimals, no thousands, no trailing zeros (e.g., 855, 866.97, 1040.364)
+Private Function FmtDec3(ByVal x As Double) As String
+    Dim y As Double
+    y = Application.WorksheetFunction.Round(x, 3)
+    FmtDec3 = Format$(y, "0.###")
+End Function
+
+' Integer with thousands & $ (e.g., $75,000)
+Private Function FmtCurrency0(ByVal x As Double) As String
+    FmtCurrency0 = Format$(x, "$#,##0")
+End Function
+
+' Integer with no separators (e.g., 75000 for the math part)
+Private Function FmtInt(ByVal x As Double) As String
+    FmtInt = Format$(Application.WorksheetFunction.Round(x, 0), "0")
+End Function
+
+' Copy text to clipboard using MSForms (late bound; no reference needed)
+Private Sub CopyTextToClipboard(ByVal txt As String)
+    On Error Resume Next
+    Dim o As Object
+    Set o = CreateObject("MSForms.DataObject")
+    o.SetText txt
+    o.PutInClipboard
+    Set o = Nothing
+    On Error GoTo 0
+End Sub
+
+'==========================
+' (Optional) Installer: creates a Shape over B2, labels it, and wires the macro
+'==========================
+Public Sub Install_BuildComment_Button()
+    Dim r As Range: Set r = Me.Range("B2")
+    Dim shp As Shape
+    Dim nm As String: nm = "Build Comment"
+
+    ' Remove existing with same name
+    On Error Resume Next
+    Me.Shapes(nm).Delete
+    On Error GoTo 0
+
+    ' Create the button as a rounded rectangle sitting exactly on cell B2
+    Set shp = Me.Shapes.AddShape(Type:=msoShapeRoundedRectangle, _
+                                 Left:=r.Left, Top:=r.Top, Width:=r.Width, Height:=r.Height)
+    With shp
+        .Name = nm
+        .TextFrame.Characters.Text = "Build Comment"
+        .TextFrame.HorizontalAlignment = xlHAlignCenter
+        .TextFrame.VerticalAlignment = xlVAlignCenter
+        .OnAction = "'" & ThisWorkbook.Name & "'!" & Me.CodeName & ".Build_Comment"
+    End With
+End Sub
