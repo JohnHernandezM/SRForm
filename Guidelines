@@ -2,8 +2,6 @@ Option Explicit
 
 '=== Address / position aliases ===
 Private Const IncludeJob        As String = "C9"
-Private Const NormalRange       As String = "C12:C19"
-Private Const ShiftedRange      As String = "C14:C21"
 Private Const NewRows           As String = "10:11"   ' rows to insert/delete
 Private Const ShiftedHeaderPos  As Long   = 13        ' table header row when shifted
 Private Const IncludeJobFrom    As String = "B10"     ' label cell: From:
@@ -17,6 +15,12 @@ Private Const ShiftedBaseRow    As Long = 14          ' first row of data block 
 Private Const UseHeaderFormat   As String = "B5"      ' reference cell for header formatting
 Private Const UseAnswerFormat   As String = "C5"      ' reference cell for answer formatting
 Private Const IncludeJobDates   As String = "C10:C11" ' range for From/To job dates (only present if YES in C9)
+
+'=== Column reference ===
+Private Const AnswerColumn      As String = "C"       ' all answers are in this column
+
+'=== Data block settings ===
+Private Const DataBlockHeight   As Long = 8           ' number of rows in each data block
 
 '=== Variables kept in sync with the dynamic range ===
 Private CC As Double
@@ -36,12 +40,12 @@ Private Sub Worksheet_Change(ByVal Target As Range)
         Exit Sub
     End If
 
-    ' 2) Otherwise, watch ONLY the active data block (NormalRange or ShiftedRange).
+    ' 2) Otherwise, watch ONLY the active data block (Normal/Shifted).
     Dim dataWatch As Range, hit As Range
     If ExtraRowsPresent() Then
-        Set dataWatch = Me.Range(ShiftedRange)
+        Set dataWatch = ShiftedDataRange()
     Else
-        Set dataWatch = Me.Range(NormalRange)
+        Set dataWatch = NormalDataRange()
     End If
 
     Set hit = Intersect(Target, dataWatch)
@@ -150,7 +154,7 @@ End Sub
 
 '-----------------------------
 ' Apply numeric Data Validation to active data block
-'   - Clears DV on both NormalRange & ShiftedRange to prevent leftovers
+'   - Clears DV on both Normal & Shifted blocks to prevent leftovers
 '   - Applies decimal DV rule allowing any real number (blanks allowed)
 '-----------------------------
 Private Sub ApplyNumericValidationToCurrentDataBlock()
@@ -160,9 +164,9 @@ Private Sub ApplyNumericValidationToCurrentDataBlock()
     ClearDataValidationOnDataBlocks
 
     If ExtraRowsPresent() Then
-        Set rng = Me.Range(ShiftedRange)
+        Set rng = ShiftedDataRange()
     Else
-        Set rng = Me.Range(NormalRange)
+        Set rng = NormalDataRange()
     End If
 
     With rng.Validation
@@ -180,8 +184,8 @@ End Sub
 
 Private Sub ClearDataValidationOnDataBlocks()
     On Error Resume Next
-    Me.Range(NormalRange).Validation.Delete
-    Me.Range(ShiftedRange).Validation.Delete
+    NormalDataRange().Validation.Delete
+    ShiftedDataRange().Validation.Delete
     On Error GoTo 0
 End Sub
 
@@ -219,20 +223,21 @@ End Sub
 '-----------------------------
 ' Sync derived variables with active data block
 '   - Chooses baseRow = NormalBaseRow (12) or ShiftedBaseRow (14)
+'   - Reads from AnswerColumn
 '   - Blanks/non-numeric treated as 1 (safe default)
 '-----------------------------
 Private Sub UpdateDerivedVars()
     Dim baseRow As Long
     baseRow = IIf(ExtraRowsPresent(), ShiftedBaseRow, NormalBaseRow)
 
-    CC          = NzD(Me.Cells(baseRow + 0, "C").Value2) ' NormalBaseRow/ShiftedBaseRow
-    CCRate      = NzD(Me.Cells(baseRow + 1, "C").Value2)
-    Payroll     = NzD(Me.Cells(baseRow + 2, "C").Value2)
-    IncLimits   = NzD(Me.Cells(baseRow + 3, "C").Value2)
-    ExMod       = NzD(Me.Cells(baseRow + 4, "C").Value2)
-    SchMod      = NzD(Me.Cells(baseRow + 5, "C").Value2)
-    PremiumDisc = NzD(Me.Cells(baseRow + 6, "C").Value2)
-    TierFactor  = NzD(Me.Cells(baseRow + 7, "C").Value2)
+    CC          = NzD(Me.Cells(baseRow + 0, AnswerColumn).Value2) ' C12 or C14
+    CCRate      = NzD(Me.Cells(baseRow + 1, AnswerColumn).Value2) ' C13 or C15
+    Payroll     = NzD(Me.Cells(baseRow + 2, AnswerColumn).Value2) ' C14 or C16
+    IncLimits   = NzD(Me.Cells(baseRow + 3, AnswerColumn).Value2) ' C15 or C17
+    ExMod       = NzD(Me.Cells(baseRow + 4, AnswerColumn).Value2) ' C16 or C18
+    SchMod      = NzD(Me.Cells(baseRow + 5, AnswerColumn).Value2) ' C17 or C19
+    PremiumDisc = NzD(Me.Cells(baseRow + 6, AnswerColumn).Value2) ' C18 or C20
+    TierFactor  = NzD(Me.Cells(baseRow + 7, AnswerColumn).Value2) ' C19 or C21
 End Sub
 
 '-----------------------------
@@ -258,4 +263,20 @@ Private Function NzD(ByVal v As Variant, Optional ByVal defaultVal As Double = 1
     Else
         NzD = defaultVal
     End If
+End Function
+
+'-----------------------------
+' Dynamic range helpers
+'   - Both ranges are DataBlockHeight rows tall
+'-----------------------------
+Private Function NormalDataRange() As Range
+    Set NormalDataRange = Me.Range( _
+        AnswerColumn & NormalBaseRow & ":" & _
+        AnswerColumn & (NormalBaseRow + DataBlockHeight - 1))
+End Function
+
+Private Function ShiftedDataRange() As Range
+    Set ShiftedDataRange = Me.Range( _
+        AnswerColumn & ShiftedBaseRow & ":" & _
+        AnswerColumn & (ShiftedBaseRow + DataBlockHeight - 1))
 End Function
