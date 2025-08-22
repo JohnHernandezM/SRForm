@@ -551,8 +551,6 @@ Private Sub Normalize_DateCellDisplay(ByVal c As Range)
     End If
 
     Dim s As String: s = CStr(v)
-    Dim slashCnt As Long: slashCnt = Len(s) - Len(Replace$(s, "/", ""))
-    Dim dashCnt As Long: dashCnt = Len(s) - Len(Replace$(s, "-", ""))
 
     ' Normalize separators to "/"
     s = Replace$(s, "-", "/")
@@ -562,7 +560,9 @@ Private Sub Normalize_DateCellDisplay(ByVal c As Range)
     If UBound(parts) <> 2 Then Exit Sub   ' should not happen if Validate_DateCell ran
 
     Dim pm As String, pd As String, py As String
-    pm = parts(0): pd = parts[1]: py = parts(2)
+    pm = parts(0)
+    pd = parts(1)
+    py = parts(2)
 
     ' Zero-pad month/day to 2 digits
     If Len(pm) = 1 Then pm = "0" & pm
