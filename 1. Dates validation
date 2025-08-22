@@ -4,8 +4,8 @@ Option Explicit
 Private Const IncludeJob_Ans_Add     As String = "C9"
 Private Const IncludeJobFrom_Lbl_Add As String = "B10"     ' label address: From:
 Private Const IncludeJobTo_Lbl_Add   As String = "B11"     ' label address: To:
-Private Const IncludeJobFrom_Ans_Add As String = "C10"     ' answer address: From date
-Private Const IncludeJobTo_Ans_Add   As String = "C11"     ' answer address: To date
+Private Const IncludeJobFrom_Ans_Add As String = "C10"     ' answer address: From date (MDY)
+Private Const IncludeJobTo_Ans_Add   As String = "C11"     ' answer address: To date (MDY)
 
 '=== Base rows for calculations (top row of active data block) ===
 Private Const Normal_BaseRow         As Long = 12          ' first row of data block in normal layout
@@ -376,7 +376,7 @@ Private Sub UpdateValues_AllVars()
 End Sub
 
 '-----------------------------
-' Validate_IncludeJob_Dates — when both C10 and C11 are non-blank and valid dates:
+' Validate_IncludeJob_Dates — MDY parser; when both C10 and C11 are parseable MDY:
 ' - allow C10 = C11
 ' - if C10 > C11 → show popup and clear both cells
 '-----------------------------
@@ -389,11 +389,14 @@ Private Sub Validate_IncludeJob_Dates()
     vFrom = fromCell.Value2
     vTo = toCell.Value2
 
-    ' Validate only when both are non-blank and recognizable dates
+    ' Validate only when both are non-blank and parseable as MDY
     If Len(vFrom) = 0 Or Len(vTo) = 0 Then Exit Sub
-    If Not (IsDate(vFrom) And IsDate(vTo)) Then Exit Sub
 
-    If CDate(vFrom) > CDate(vTo) Then
+    Dim dFrom As Date, dTo As Date
+    If Not Parse_MDY_Date(vFrom, dFrom) Then Exit Sub
+    If Not Parse_MDY_Date(vTo, dTo) Then Exit Sub
+
+    If dFrom > dTo Then
         MsgBox "The 'From' date (C10) cannot be later than the 'To' date (C11)." & vbCrLf & _
                "Both values will be cleared.", vbExclamation, "Invalid date range"
         Dim prev As Boolean
@@ -404,6 +407,51 @@ Private Sub Validate_IncludeJob_Dates()
         Application.EnableEvents = prev
     End If
 End Sub
+
+'-----------------------------
+' Parse_MDY_Date — parse string as M/D[/YY or YYYY]; separators: / - or space
+' Returns True and sets outDate on success; False otherwise.
+' Two-digit years mapped: 50–99 → 1950–1999; 00–49 → 2000–2049.
+'-----------------------------
+Private Function Parse_MDY_Date(ByVal v As Variant, ByRef outDate As Date) As Boolean
+    On Error GoTo Fail
+    If IsError(v) Or IsEmpty(v) Then Exit Function
+
+    Dim s As String
+    s = Trim$(CStr(v))
+    If s = vbNullString Then Exit Function
+
+    ' Normalize separators to single "/"
+    s = Replace(s, "-", "/")
+    s = Replace(s, " ", "/")
+    Do While InStr(s, "//") > 0
+        s = Replace(s, "//", "/")
+    Loop
+
+    Dim parts() As String
+    parts = Split(s, "/")
+    If UBound(parts) <> 2 Then Exit Function
+
+    Dim m As Long, d As Long, y As Long
+    m = CLng(Val(parts(0)))
+    d = CLng(Val(parts(1)))
+    y = CLng(Val(parts(2)))
+
+    If y < 100 Then
+        If y >= 50 Then
+            y = 1900 + y
+        Else
+            y = 2000 + y
+        End If
+    End If
+
+    ' Let DateSerial validate month/day overflows
+    outDate = DateSerial(y, m, d)
+    Parse_MDY_Date = True
+    Exit Function
+Fail:
+    Parse_MDY_Date = False
+End Function
 
 '-----------------------------
 ' Convert_Numeric_Double — convert to Double; blanks/non-numeric → default (1 by default)
