@@ -209,7 +209,7 @@ Private Sub Apply_NumericValidation_WaiverFactors()
         .Add Type:=xlValidateDecimal, Operator:=xlGreater, Formula1:="0"
         .IgnoreBlank = True
         .InCellDropdown = False
-        .ShowError = False        ' keep it silent; enforcement handled in Handle_DataChange as well
+        .ShowError = False
     End With
 End Sub
 
@@ -281,7 +281,7 @@ Private Sub Handle_IncLimits(ByVal incCell As Range)
 
     If Not f.ChosenProceed Then
         Application.EnableEvents = False
-        incCell.ClearContents  ' treat as blank; next UpdateValues_AllVars sets IncLimits_Ans_Val = 1 via Convert_Numeric_Double
+        incCell.ClearContents
         Application.EnableEvents = True
     End If
 
@@ -352,7 +352,7 @@ Private Sub UpdateValues_AllVars()
     SchMod_Ans_Val      = Convert_Numeric_Double(Me.Cells(baseRow + 5, Answer_Col).Value2)
     TierFactor_Ans_Val  = Convert_Numeric_Double(Me.Cells(baseRow + 7, Answer_Col).Value2)
 
-    ' IncLimits (raw → adjusted) using its dynamic address
+    ' IncLimits (raw → adjusted)
     Dim incRaw As Double
     If Len(Me.Range(IncLimits_Ans_Add).Value2) = 0 Then
         IncLimits_Ans_Val = 1#
@@ -361,11 +361,11 @@ Private Sub UpdateValues_AllVars()
         If incRaw < 1# Then
             IncLimits_Ans_Val = 1# + incRaw
         Else
-            IncLimits_Ans_Val = incRaw   ' persists only if user clicked Proceed (else address was cleared)
+            IncLimits_Ans_Val = incRaw
         End If
     End If
 
-    ' PremiumDisc (raw → adjusted) using its dynamic address
+    ' PremiumDisc (raw → adjusted)
     Dim pdRaw As Double
     If Len(Me.Range(PremiumDisc_Ans_Add).Value2) = 0 Then
         PremiumDisc_Ans_Val = 1#
@@ -380,35 +380,23 @@ End Sub
 ' - Accepts m/d/yy, m/d/yyyy, m/dd/yy, m/dd/yyyy, mm/d/yy, mm/d/yyyy, mm/dd/yy, mm/dd/yyyy
 ' - Validates only when both cells parse
 ' - Allows C10 = C11; if C10 > C11 → popup + clear both
-' - If either cell has spaces or invalid characters, that cell is cleared silently
+' - If a TEXT entry has spaces or invalid characters, that cell is cleared silently
+' - If Excel already stored a numeric date, we accept it directly (locale-agnostic)
 '-----------------------------
 Private Sub Validate_IncludeJob_Dates()
     Dim fromCell As Range, toCell As Range
     Set fromCell = Me.Range(IncludeJobFrom_Ans_Add)
     Set toCell = Me.Range(IncludeJobTo_Ans_Add)
 
-    Dim sFrom As String, sTo As String
-    sFrom = CStr(fromCell.Value2)
-    sTo = CStr(toCell.Value2)
+    Dim vFrom As Variant, vTo As Variant
+    vFrom = fromCell.Value2
+    vTo = toCell.Value2
 
-    ' If either has spaces, clear that cell silently and stop
-    If InStr(sFrom, " ") > 0 Then
-        SilentClear fromCell: Exit Sub
-    End If
-    If InStr(sTo, " ") > 0 Then
-        SilentClear toCell: Exit Sub
-    End If
-
-    ' Only proceed when both non-blank
-    If LenB(sFrom) = 0 Or LenB(sTo) = 0 Then Exit Sub
-
-    ' Reject any char other than digits, "/", "-"
-    If Not AllowedDateCharsOnly(sFrom) Then SilentClear fromCell: Exit Sub
-    If Not AllowedDateCharsOnly(sTo) Then SilentClear toCell: Exit Sub
+    If Len(vFrom) = 0 Or Len(vTo) = 0 Then Exit Sub
 
     Dim dFrom As Date, dTo As Date
-    If Not Parse_MDY_Date_Strict(sFrom, dFrom) Then SilentClear fromCell: Exit Sub
-    If Not Parse_MDY_Date_Strict(sTo, dTo) Then SilentClear toCell: Exit Sub
+    If Not TryGetMDYDate(vFrom, fromCell, dFrom) Then Exit Sub
+    If Not TryGetMDYDate(vTo, toCell, dTo) Then Exit Sub
 
     If dFrom > dTo Then
         MsgBox "The 'From' date (C10) cannot be later than the 'To' date (C11)." & vbCrLf & _
@@ -421,6 +409,37 @@ Private Sub Validate_IncludeJob_Dates()
         Application.EnableEvents = prev
     End If
 End Sub
+
+' Returns True and sets d when v is a valid MDY date.
+' If v is numeric/date already, accept directly (locale-agnostic).
+' If v is text: must contain only digits and "/" or "-" (no spaces), and match the 8 MDY combos.
+Private Function TryGetMDYDate(ByVal v As Variant, ByVal c As Range, ByRef d As Date) As Boolean
+    On Error GoTo Fail
+    ' If Excel already parsed it (numeric serial or Date), accept directly
+    If IsDate(v) And VarType(v) <> vbString Then
+        d = CDate(v)
+        TryGetMDYDate = True
+        Exit Function
+    End If
+    If IsNumeric(v) And VarType(v) <> vbString Then
+        d = CDate(v)
+        TryGetMDYDate = True
+        Exit Function
+    End If
+
+    ' Otherwise treat as text and validate strictly
+    Dim s As String: s = CStr(v)
+    If InStr(s, " ") > 0 Then SilentClear c: Exit Function
+    If Not AllowedDateCharsOnly(s) Then SilentClear c: Exit Function
+
+    Dim ok As Boolean
+    ok = Parse_MDY_Date_Strict(s, d)
+    If Not ok Then SilentClear c
+    TryGetMDYDate = ok
+    Exit Function
+Fail:
+    TryGetMDYDate = False
+End Function
 
 '-----------------------------
 ' AllowedDateCharsOnly — True if s contains only 0-9 or "/" or "-" (no spaces)
@@ -449,7 +468,7 @@ End Function
 Private Function Parse_MDY_Date_Strict(ByVal s As String, ByRef outDate As Date) As Boolean
     On Error GoTo Fail
 
-    ' Quick structural check: must be exactly two separators
+    ' Count separators; require exactly 2, and separators may be "/" or "-"
     Dim sepCount As Long, i As Long, ch As String
     For i = 1 To Len(s)
         ch = Mid$(s, i, 1)
@@ -465,25 +484,21 @@ Private Function Parse_MDY_Date_Strict(ByVal s As String, ByRef outDate As Date)
     parts = Split(t, "/")
     If UBound(parts) <> 2 Then Exit Function
 
-    ' Each part must be 1–2 digits for M and D, and 2 or 4 digits for Y
+    ' Enforce lengths: M(1-2), D(1-2), Y(2 or 4)
     Dim pm As String, pd As String, py As String
     pm = parts(0): pd = parts(1): py = parts(2)
-
     If Len(pm) < 1 Or Len(pm) > 2 Then Exit Function
     If Len(pd) < 1 Or Len(pd) > 2 Then Exit Function
     If Not (Len(py) = 2 Or Len(py) = 4) Then Exit Function
 
-    ' All numeric
+    ' Must be digits
     If Not IsNumeric(pm) Or Not IsNumeric(pd) Or Not IsNumeric(py) Then Exit Function
 
     Dim m As Long, d As Long, y As Long
     m = CLng(pm): d = CLng(pd): y = CLng(py)
-
-    ' Ranges
     If m < 1 Or m > 12 Then Exit Function
     If d < 1 Or d > 31 Then Exit Function
 
-    ' Two-digit year mapping
     If Len(py) = 2 Then
         If y >= 50 Then
             y = 1900 + y
@@ -492,7 +507,6 @@ Private Function Parse_MDY_Date_Strict(ByVal s As String, ByRef outDate As Date)
         End If
     End If
 
-    ' Build and verify (avoid DateSerial overflow semantics)
     Dim dt As Date
     dt = DateSerial(y, m, d)
     If Month(dt) <> m Or Day(dt) <> d Or Year(dt) <> y Then Exit Function
