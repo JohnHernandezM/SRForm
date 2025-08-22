@@ -1,109 +1,429 @@
-from Npp import *
-import re
+Option Explicit
 
-# --- Example lookup table ---
-lookup_table = [
-    {"Code": "12", "State": "NY", "Session": "East"},
-    {"Code": "34", "State": "TX", "Session": "Texas"},
-    {"Code": "56", "State": "CA", "Session": "West"},
-    # Add your actual values here
-]
+'=== Address / position aliases (fixed addresses) ===
+Private Const IncludeJob_Ans_Add     As String = "C9"
+Private Const IncludeJobFrom_Lbl_Add As String = "B10"     ' label address: From:
+Private Const IncludeJobTo_Lbl_Add   As String = "B11"     ' label address: To:
+Private Const IncludeJobFrom_Ans_Add As String = "C10"     ' answer address: From date
+Private Const IncludeJobTo_Ans_Add   As String = "C11"     ' answer address: To date
 
-line_business_options = [
-    "Artisan Contractor", "Auto Service & Repair", "Commercial Auto",
-    "Habitational", "Manufacturing", "Real Estate", "Restaurant",
-    "Retail", "Umbrella", "Wholesale Distribution"
-]
+'=== Base rows for calculations (top row of active data block) ===
+Private Const NormalBaseRow          As Long = 12          ' first row of data block in normal layout
+Private Const ShiftedBaseRow         As Long = 14          ' first row of data block in shifted layout
 
-def get_session_from_input(value):
-    value = value.strip()
-    for row in lookup_table:
-        if value.isdigit() and row['Code'] == value:
-            return row['Session']
-        elif value.isalpha() and row['State'].upper() == value.upper():
-            return row['Session']
-    return None
+'=== Format anchors (reference cells for formatting) ===
+Private Const RefFormat_Header_Cell  As String = "B5"      ' reference cell for header formatting
+Private Const RefFormat_Answer_Cell  As String = "C5"      ' reference cell for answer formatting
 
-def insert_or_replace_line(prefix, value, after_line):
-    for i in range(editor.getLineCount()):
-        if editor.getLine(i).startswith(prefix):
-            editor.replaceWholeLine(i, "{} {}\n".format(prefix, value))
-            return
-    editor.insertText(editor.positionFromLine(after_line + 1), "{} {}\n".format(prefix, value))
+'=== Column reference ===
+Private Const AnswerColumn           As String = "C"       ' all answers live in this column
 
-def line_index(label):
-    lines = [editor.getLine(i).strip() for i in range(editor.getLineCount())]
-    return next((i for i, l in enumerate(lines) if l.startswith(label)), -1)
+'=== Data block settings ===
+Private Const DataBlockHeight        As Long = 8           ' number of rows in each data block
 
-def on_charadded(char):
-    lines = [editor.getLine(i).strip() for i in range(editor.getLineCount())]
+'=== Synced variables (module-level); blanks default to 1 via NzD ===
+Private CC_Ans_Val As Double
+Private CCRate_Ans_Val As Double
+Private Payroll_Ans_Val As Double
+Private IncLimits_Ans_Val As Double
+Private ExMod_Ans_Val As Double
+Private SchMod_Ans_Val As Double
+Private PremiumDisc_Ans_Val As Double
+Private TierFactor_Ans_Val As Double
+Private WaiverCharge_Ans_Val As Double
 
-    policy_i = line_index("Policy:")
-    policy_val = lines[policy_i][len("Policy:"):].strip() if policy_i != -1 else ""
+'=== Dynamic addresses for visible inputs (kept current by UpdateAddress_DynamicVars) ===
+Private CCRate_Ans_Add As String       ' "C13" (normal) or "C15" (shifted)
+Private Payroll_Ans_Add As String      ' "C14" (normal) or "C16" (shifted)
+Private IncLimits_Ans_Add As String    ' "C15" (normal) or "C17" (shifted)
+Private PremiumDisc_Ans_Add As String  ' "C18" (normal) or "C20" (shifted)
 
-    if policy_val:
-        if line_index("Policy Status:") == -1:
-            insert_or_replace_line("Policy Status:", "", policy_i)
-        if line_index("Line of Business:") == -1:
-            lob_line = "Line of Business: [Select from: {}]".format(", ".join(line_business_options))
-            editor.insertText(editor.positionFromLine(policy_i + 2), lob_line + "\n")
-        if line_index("Session:") == -1:
-            insert_or_replace_line("Session:", "", policy_i + 3)
+Private Sub Worksheet_Change(ByVal Target As Range)
+    ' Keep dynamic address variables in sync with current layout
+    UpdateAddress_DynamicVars
 
-    session_i = line_index("Session:")
-    if session_i != -1:
-        session_line = lines[session_i]
-        session_input = session_line[len("Session:"):].strip()
-        if session_input and not session_line.endswith("]"):
-            resolved = get_session_from_input(session_input)
-            if resolved:
-                editor.replaceWholeLine(session_i, "Session: {} [{}]\n".format(session_input, resolved))
+    ' 1) IncludeJob (C9) changed → handle structure and DV, then recalc
+    If Not Intersect(Target, Me.Range(IncludeJob_Ans_Add)) Is Nothing Then
+        Handle_IncludeJob
+        ' After structural change, refresh addresses/values and compute
+        UpdateAddress_DynamicVars
+        UpdateValues_AllVars
+        Compute_WaiverCharge
+        Exit Sub
+    End If
 
-    required = ["SR#", "Policy:", "Policy Status:", "Line of Business:", "Session:"]
-    all_ready = all(line_index(lbl) != -1 and lines[line_index(lbl)].split(":", 1)[-1].strip() for lbl in required)
+    ' 2) If IncLimits input address changed (C15 normal / C17 shifted) and > 1 → show Proceed/Edit popup
+    If Not Intersect(Target, Me.Range(IncLimits_Ans_Add)) Is Nothing Then HandleIncLimitsGreaterThanOne Me.Range(IncLimits_Ans_Add)
 
-    if all_ready and line_index("1. Who is requesting?") == -1:
-        editor.insertText(editor.getLength(),
-            "\n1. Who is requesting? \n- Type: [Agent / Agency Rep / Insured]\n\n"
-            "2. What is being requested?\n\n"
-            "3. Is this an Endorsement or a BO/RI?\n\n"
-            "4. What is the Effective Date?\n"
-            "5. Does it make sense?\n"
-        )
+    ' 3) Numeric data block edits (Normal/Shifted)
+    Dim dataWatch As Range, hit As Range
+    If ExtraRowsPresent() Then
+        Set dataWatch = ShiftedDataRange()
+    Else
+        Set dataWatch = NormalDataRange()
+    End If
 
-    type_i = line_index("- Type:")
-    if type_i != -1:
-        type_val = lines[type_i].split(":", 1)[-1].strip()
-        if type_val in ["Agent", "Agency Rep"] and line_index("- Licensed:") == -1:
-            editor.insertText(editor.positionFromLine(type_i + 1), "- Licensed: [Yes / No]\n")
+    Set hit = Intersect(Target, dataWatch)
+    If hit Is Nothing Then Exit Sub
 
-    q1_i = line_index("1. Who is requesting?")
-    if q1_i != -1:
-        q1_line = lines[q1_i]
-        name_match = re.match(r"1\. Who is requesting\?\s+(.+?)(?:\s+-\s+.*)?$", q1_line)
-        if name_match:
-            name = name_match.group(1)
-            type_val = lines[type_i].split(":", 1)[-1].strip() if type_i != -1 else ""
-            lic_i = line_index("- Licensed:")
-            lic_val = lines[lic_i].split(":", 1)[-1].strip() if lic_i != -1 else ""
+    ' Enforce numeric-only silently, then refresh values and compute
+    HandleDataChange hit
+    UpdateValues_AllVars
+    Compute_WaiverCharge
+End Sub
 
-            if type_val == "Agent":
-                suffix = " - Licensed Agent" if lic_val == "Yes" else " - Agent"
-            elif type_val == "Agency Rep":
-                suffix = " - Licensed Agency Rep" if lic_val == "Yes" else " - Agency Rep"
-            elif type_val == "Insured":
-                suffix = " - Insured"
-            else:
-                suffix = ""
+'-----------------------------
+' Handle_IncludeJob — responds to IncludeJob (C9) changes:
+' - YES: insert extra rows (labels C10/C11), format, and reapply DV
+' - NO/blank: remove extra rows and reapply DV
+'-----------------------------
+Private Sub Handle_IncludeJob()
+    On Error GoTo CleanExit
+    Dim prevEvents As Boolean, prevUpdate As Boolean
+    prevEvents = Application.EnableEvents
+    prevUpdate = Application.ScreenUpdating
+    Application.EnableEvents = False
+    Application.ScreenUpdating = False
 
-            editor.replaceWholeLine(q1_i, "1. Who is requesting? {}{}\n".format(name, suffix))
+    Dim newVal As String
+    newVal = UCase$(Trim$(Me.Range(IncludeJob_Ans_Add).Value2))
 
-def on_bufferactivated(args):
-    editor.callback(on_charadded, [SCINTILLANOTIFICATION.CHARADDED])
+    Dim haveExtra As Boolean
+    haveExtra = ExtraRowsPresent()
 
-# Initialize form content
-editor.setText("SR# \n\nPolicy: \n")
+    Select Case newVal
+        Case "YES"
+            If Not haveExtra Then
+                JobRowsRange().Insert Shift:=xlDown, CopyOrigin:=xlFormatFromLeftOrAbove
+            End If
+            SetupExtraRows
+            ApplyNumericValidationToCurrentDataBlock
 
-notepad.callback(on_bufferactivated, [NOTIFICATION.BUFFERACTIVATED])
-editor.callback(on_charadded, [SCINTILLANOTIFICATION.CHARADDED])
+        Case "NO", vbNullString
+            If haveExtra Then
+                JobRowsRange().Delete Shift:=xlUp
+            End If
+            ApplyNumericValidationToCurrentDataBlock
 
+        Case Else
+            ' ignore
+    End Select
+
+CleanExit:
+    Application.CutCopyMode = False
+    Application.ScreenUpdating = prevUpdate
+    Application.EnableEvents = prevEvents
+End Sub
+
+'-----------------------------
+' UpdateAddress_DynamicVars — set input address strings for current layout
+'  CCRate_Ans_Add:      C13 (normal) / C15 (shifted)
+'  Payroll_Ans_Add:     C14 (normal) / C16 (shifted)
+'  IncLimits_Ans_Add:   C15 (normal) / C17 (shifted)
+'  PremiumDisc_Ans_Add: C18 (normal) / C20 (shifted)
+'-----------------------------
+Private Sub UpdateAddress_DynamicVars()
+    If ExtraRowsPresent() Then
+        CCRate_Ans_Add      = "C15"
+        Payroll_Ans_Add     = "C16"
+        IncLimits_Ans_Add   = "C17"
+        PremiumDisc_Ans_Add = "C20"
+    Else
+        CCRate_Ans_Add      = "C13"
+        Payroll_Ans_Add     = "C14"
+        IncLimits_Ans_Add   = "C15"
+        PremiumDisc_Ans_Add = "C18"
+    End If
+End Sub
+
+'-----------------------------
+' ExtraRowsPresent — True if table header is at ShiftedBaseRow - 1 (i.e., extra rows inserted)
+'-----------------------------
+Private Function ExtraRowsPresent() As Boolean
+    On Error GoTo FailSafe
+    Dim lo As ListObject
+    Set lo = Me.ListObjects("Calculator")
+    ExtraRowsPresent = (lo.HeaderRowRange.Row = (ShiftedBaseRow - 1))
+    Exit Function
+FailSafe:
+    ExtraRowsPresent = False
+End Function
+
+'-----------------------------
+' SetupExtraRows — normalize inserted rows:
+' - Set labels (B10:B11) using RefFormat_Header_Cell formatting
+' - Clear/format C10:C11 answers using RefFormat_Answer_Cell formatting
+'-----------------------------
+Private Sub SetupExtraRows()
+    ' Labels (B10:B11)
+    CopyFormats FromCell:=Me.Range(RefFormat_Header_Cell), _
+                ToRange:=Me.Range(IncludeJobFrom_Lbl_Add & ":" & IncludeJobTo_Lbl_Add)
+    Me.Range(IncludeJobFrom_Lbl_Add).Value = "From:"
+    Me.Range(IncludeJobTo_Lbl_Add).Value = "To:"
+
+    ' Answer date cells (C10:C11) - clear and apply answer formatting, remove any DV
+    With JobDatesRange()
+        .ClearContents
+        On Error Resume Next
+        .Validation.Delete
+        On Error GoTo 0
+        CopyFormats FromCell:=Me.Range(RefFormat_Answer_Cell), ToRange:=.Cells
+    End With
+End Sub
+
+'-----------------------------
+' CopyFormats — copy only formats from FromCell to ToRange
+'-----------------------------
+Private Sub CopyFormats(ByVal FromCell As Range, ByVal ToRange As Range)
+    FromCell.Copy
+    ToRange.PasteSpecial Paste:=xlPasteFormats
+    Application.CutCopyMode = False
+End Sub
+
+'-----------------------------
+' ApplyNumericValidationToCurrentDataBlock — numbers-only DV on active block (no alerts/popups)
+'-----------------------------
+Private Sub ApplyNumericValidationToCurrentDataBlock()
+    Dim rng As Range
+    ClearDataValidationOnDataBlocks
+
+    If ExtraRowsPresent() Then
+        Set rng = ShiftedDataRange()
+    Else
+        Set rng = NormalDataRange()
+    End If
+
+    With rng.Validation
+        .Delete
+        .Add Type:=xlValidateDecimal, Operator:=xlBetween, Formula1:="-1E+308", Formula2:="1E+308"
+        .IgnoreBlank = True
+        .InCellDropdown = False
+        ' Intentionally no ErrorTitle/ErrorMessage/AlertStyle/ShowError
+    End With
+End Sub
+
+'-----------------------------
+' ClearDataValidationOnDataBlocks — removes DV on both potential ranges
+'-----------------------------
+Private Sub ClearDataValidationOnDataBlocks()
+    On Error Resume Next
+    NormalDataRange().Validation.Delete
+    ShiftedDataRange().Validation.Delete
+    On Error GoTo 0
+End Sub
+
+'-----------------------------
+' HandleDataChange — silent numeric enforcement on edited cells in active data block
+' - Allows blanks
+' - Converts numeric strings to numbers
+' - Clears non-numeric entries
+'-----------------------------
+Private Sub HandleDataChange(ByVal rngChanged As Range)
+    On Error GoTo CleanExit
+    Application.EnableEvents = False
+
+    Dim c As Range, v
+    For Each c In rngChanged.Cells
+        v = c.Value2
+        If Len(v) = 0 Then
+            ' allow blanks
+        ElseIf IsNumeric(v) Then
+            If VarType(v) = vbString Then
+                On Error Resume Next
+                c.Value = CDbl(v)
+                On Error GoTo 0
+            End If
+        Else
+            c.ClearContents
+        End If
+    Next c
+
+CleanExit:
+    Application.EnableEvents = True
+End Sub
+
+'-----------------------------
+' HandleIncLimitsGreaterThanOne — when IncLimits address is edited to > 1:
+' - Show custom Proceed/Edit dialog (UserForm)
+' - Proceed → keep value as typed
+' - Edit    → clear the cell (next refresh makes IncLimits_Ans_Val = 1 via NzD)
+'-----------------------------
+Private Sub HandleIncLimitsGreaterThanOne(ByVal incCell As Range)
+    Dim v As Variant
+    v = incCell.Value2
+    If Len(v) = 0 Then Exit Sub
+    If Not IsNumeric(v) Then Exit Sub
+
+    Dim x As Double
+    x = CDbl(v)
+    If x <= 1# Then Exit Sub
+
+    ' Show custom Proceed/Edit dialog
+    Dim f As ufIncLimitsConfirm
+    Set f = New ufIncLimitsConfirm
+    f.Setup x
+    f.Show vbModal
+
+    If Not f.ChosenProceed Then
+        Application.EnableEvents = False
+        incCell.ClearContents  ' treat as blank; next UpdateValues_AllVars sets IncLimits_Ans_Val = 1 via NzD
+        Application.EnableEvents = True
+    End If
+
+    Unload f
+    Set f = Nothing
+End Sub
+
+'-----------------------------
+' Compute_WaiverCharge — calculates & writes result (rounded int) to:
+' - C22 in normal layout (baseRow + 10)
+' - C24 in shifted layout (baseRow + 10)
+' Uses module-level values prepared by UpdateValues_AllVars.
+' Requires CCRate & Payroll addresses to be non-blank (checked via *_Ans_Add).
+'-----------------------------
+Private Sub Compute_WaiverCharge()
+    Dim baseRow As Long: baseRow = IIf(ExtraRowsPresent(), ShiftedBaseRow, NormalBaseRow)
+
+    ' Guard: visible CCRate/Payroll must be non-blank before computing
+    If Len(Me.Range(CCRate_Ans_Add).Value2) = 0 Or _
+       Len(Me.Range(Payroll_Ans_Add).Value2) = 0 Then
+        Dim prevEvtClear As Boolean
+        prevEvtClear = Application.EnableEvents
+        Application.EnableEvents = False
+        Me.Cells(baseRow + 10, AnswerColumn).ClearContents
+        Application.EnableEvents = prevEvtClear
+        Exit Sub
+    End If
+
+    ' WaiverCharge (full precision); blanks have already become 1 via UpdateValues_AllVars
+    WaiverCharge_Ans_Val = (Payroll_Ans_Val * CCRate_Ans_Val / 100#) * _
+                           IncLimits_Ans_Val * ExMod_Ans_Val * SchMod_Ans_Val * _
+                           PremiumDisc_Ans_Val * TierFactor_Ans_Val
+
+    ' Write rounded integer (display formatting already currency with 0 decimals)
+    Dim outCell As Range
+    Set outCell = Me.Cells(baseRow + 10, AnswerColumn)
+
+    Dim prevEvtWrite As Boolean
+    prevEvtWrite = Application.EnableEvents
+    Application.EnableEvents = False
+    On Error Resume Next
+    outCell.Value = Application.WorksheetFunction.Round(WaiverCharge_Ans_Val, 0)
+    On Error GoTo 0
+    Application.EnableEvents = prevEvtWrite
+End Sub
+
+'-----------------------------
+' UpdateValues_AllVars — refresh all module-level values from active data block
+' - IncLimits rule:
+'     blank → 1
+'     < 1   → 1 + entered
+'     >= 1  → value as typed (only if user chose Proceed; otherwise cell was cleared)
+' - PremiumDisc rule:
+'     blank → 1
+'     not blank → 1 - entered
+'-----------------------------
+Private Sub UpdateValues_AllVars()
+    Dim baseRow As Long
+    baseRow = IIf(ExtraRowsPresent(), ShiftedBaseRow, NormalBaseRow)
+
+    ' Values from dynamic addresses (no offset math)
+    CCRate_Ans_Val   = NzD(Me.Range(CCRate_Ans_Add).Value2)
+    Payroll_Ans_Val  = NzD(Me.Range(Payroll_Ans_Add).Value2)
+
+    ' Others by offset within active block
+    CC_Ans_Val          = NzD(Me.Cells(baseRow + 0, AnswerColumn).Value2)
+    ExMod_Ans_Val       = NzD(Me.Cells(baseRow + 4, AnswerColumn).Value2)
+    SchMod_Ans_Val      = NzD(Me.Cells(baseRow + 5, AnswerColumn).Value2)
+    TierFactor_Ans_Val  = NzD(Me.Cells(baseRow + 7, AnswerColumn).Value2)
+
+    ' IncLimits (raw → adjusted) using its dynamic address
+    Dim incRaw As Double
+    If Len(Me.Range(IncLimits_Ans_Add).Value2) = 0 Then
+        IncLimits_Ans_Val = 1#
+    Else
+        incRaw = NzD(Me.Range(IncLimits_Ans_Add).Value2)
+        If incRaw < 1# Then
+            IncLimits_Ans_Val = 1# + incRaw
+        Else
+            IncLimits_Ans_Val = incRaw   ' persists only if user clicked Proceed (else address was cleared)
+        End If
+    End If
+
+    ' PremiumDisc (raw → adjusted) using its dynamic address
+    Dim pdRaw As Double
+    If Len(Me.Range(PremiumDisc_Ans_Add).Value2) = 0 Then
+        PremiumDisc_Ans_Val = 1#
+    Else
+        pdRaw = NzD(Me.Range(PremiumDisc_Ans_Add).Value2)
+        PremiumDisc_Ans_Val = 1# - pdRaw
+    End If
+End Sub
+
+'-----------------------------
+' NzD — convert to Double; blanks/non-numeric → default (1 by default)
+'-----------------------------
+Private Function NzD(ByVal v As Variant, Optional ByVal defaultVal As Double = 1#) As Double
+    If IsError(v) Then
+        NzD = defaultVal
+    ElseIf IsEmpty(v) Then
+        NzD = defaultVal
+    ElseIf VarType(v) = vbString Then
+        If Trim$(v) = vbNullString Then
+            NzD = defaultVal
+        ElseIf IsNumeric(v) Then
+            NzD = CDbl(v)
+        Else
+            NzD = defaultVal
+        End If
+    ElseIf IsNumeric(v) Then
+        NzD = CDbl(v)
+    Else
+        NzD = defaultVal
+    End If
+End Function
+
+'-----------------------------
+' NormalDataRange — C12:C19 (normal)
+'-----------------------------
+Private Function NormalDataRange() As Range
+    Set NormalDataRange = Me.Range( _
+        AnswerColumn & NormalBaseRow & ":" & _
+        AnswerColumn & (NormalBaseRow + DataBlockHeight - 1))
+End Function
+
+'-----------------------------
+' ShiftedDataRange — C14:C21 (shifted)
+'-----------------------------
+Private Function ShiftedDataRange() As Range
+    Set ShiftedDataRange = Me.Range( _
+        AnswerColumn & ShiftedBaseRow & ":" & _
+        AnswerColumn & (ShiftedBaseRow + DataBlockHeight - 1))
+End Function
+
+'-----------------------------
+' JobRowsRange — entire rows for the job date labels (From/To)
+'-----------------------------
+Private Function JobRowsRange() As Range
+    Dim r1 As Long, r2 As Long
+    r1 = Me.Range(IncludeJobFrom_Lbl_Add).Row
+    r2 = Me.Range(IncludeJobTo_Lbl_Add).Row
+    Set JobRowsRange = Me.Rows(CStr(r1) & ":" & CStr(r2))
+End Function
+
+'-----------------------------
+' JobDatesRange — C10:C11 (answers for From/To)
+'-----------------------------
+Private Function JobDatesRange() As Range
+    Set JobDatesRange = Me.Range(IncludeJobFrom_Ans_Add & ":" & IncludeJobTo_Ans_Add)
+End Function
+
+'-----------------------------
+' IncLimitsInputCell — returns the visible IncLimits input range (C15 normal / C17 shifted)
+'-----------------------------
+Private Function IncLimitsInputCell() As Range
+    If Len(IncLimits_Ans_Add) = 0 Then
+        UpdateAddress_DynamicVars
+    End If
+    Set IncLimitsInputCell = Me.Range(IncLimits_Ans_Add)
+End Function
