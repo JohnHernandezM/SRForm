@@ -24,12 +24,6 @@ Private Const AnswerColumn            As String = "C"       ' all answers are in
 '=== Data block settings ===
 Private Const DataBlockHeight         As Long = 8           ' number of rows in each data block
 
-'=== Date validation settings ===
-Private Const EffectiveDate_Answer    As String = "C5"      ' main date input
-Private Const DateOutputFormat        As String = "mm/dd/yyyy"
-Private Const MinAllowedDate          As Date = #1/1/1950#
-Private Const MaxAllowedDate          As Date = #12/31/2099#
-
 '=== Variables kept in sync with the dynamic range ===
 Private CC As Double
 Private CCRate As Double
@@ -47,16 +41,7 @@ Private Sub Worksheet_Change(ByVal Target As Range)
         Exit Sub
     End If
 
-    ' 2) Date cells: C5 and (if present) C10:C11
-    Dim dateHit As Range
-    Set dateHit = Intersect(Target, DateWatchRange())
-    If Not dateHit Is Nothing Then
-        HandleDateChange dateHit
-        EnforceJobDateOrder
-        Exit Sub
-    End If
-
-    ' 3) Numeric data block (Normal/Shifted)
+    ' 2) Numeric data block (Normal/Shifted)
     Dim dataWatch As Range, hit As Range
     If ExtraRowsPresent() Then
         Set dataWatch = ShiftedDataRange()
@@ -94,14 +79,12 @@ Private Sub HandleC9Toggle()
                 Me.Rows(NewRows).Insert Shift:=xlDown, CopyOrigin:=xlFormatFromLeftOrAbove
             End If
             SetupExtraRows
-            EnsureDateFormats
             ApplyNumericValidationToCurrentDataBlock
 
         Case "NO", vbNullString
             If haveExtra Then
                 Me.Rows(NewRows).Delete Shift:=xlUp
             End If
-            EnsureDateFormats
             ApplyNumericValidationToCurrentDataBlock
         Case Else
             ' ignore
@@ -137,7 +120,7 @@ Private Sub SetupExtraRows()
     Me.Range(IncludeJobFrom_Label).Value = "From:"
     Me.Range(IncludeJobTo_Label).Value = "To:"
 
-    ' Date inputs
+    ' Date inputs (reset contents and formatting; no DV or validation here)
     With Me.Range(IncludeJobDates)
         .ClearContents
         On Error Resume Next
@@ -145,18 +128,6 @@ Private Sub SetupExtraRows()
         On Error GoTo 0
         CopyFormats FromCell:=Me.Range(ReferenceFormat_Answer), ToRange:=.Cells
     End With
-End Sub
-
-'-----------------------------
-' Ensure date cells use a consistent display format
-'-----------------------------
-Private Sub EnsureDateFormats()
-    On Error Resume Next
-    Me.Range(EffectiveDate_Answer).NumberFormat = DateOutputFormat
-    If ExtraRowsPresent() Then
-        Me.Range(IncludeJobDates).NumberFormat = DateOutputFormat
-    End If
-    On Error GoTo 0
 End Sub
 
 '-----------------------------
@@ -225,137 +196,6 @@ CleanExit:
 End Sub
 
 '-----------------------------
-' Date input handler (C5 and C10:C11 if present) — silent validation
-'-----------------------------
-Private Sub HandleDateChange(ByVal rngChanged As Range)
-    On Error GoTo CleanExit
-    Application.EnableEvents = False
-
-    Dim c As Range, v, d As Date
-    For Each c In rngChanged.Cells
-        v = c.Value2
-
-        If Len(v) = 0 Then
-            ' allow blank
-
-        ElseIf VarType(v) = vbDate Or IsDate(v) Then
-            d = CDate(v)
-            If d < MinAllowedDate Or d > MaxAllowedDate Then
-                c.ClearContents
-            Else
-                c.Value = d
-                c.NumberFormat = DateOutputFormat
-            End If
-
-        Else
-            Dim s As String, sNorm As String
-            s = CStr(v)
-
-            If Not IsDateAllowedChars(s) Then
-                c.ClearContents
-                GoTo NextCell
-            End If
-
-            ' normalize dashes/spaces to slashes & trim
-            sNorm = Replace(Replace(Trim$(s), "-", "/"), " ", "")
-
-            If TryParseUSDate(sNorm, d) Then
-                If d < MinAllowedDate Or d > MaxAllowedDate Then
-                    c.ClearContents
-                Else
-                    c.Value = d
-                    c.NumberFormat = DateOutputFormat
-                End If
-            Else
-                c.ClearContents
-            End If
-        End If
-NextCell:
-    Next c
-
-CleanExit:
-    Application.EnableEvents = True
-End Sub
-
-'-----------------------------
-' Enforce C11 >= C10 silently
-'-----------------------------
-Private Sub EnforceJobDateOrder()
-    If Not ExtraRowsPresent() Then Exit Sub
-
-    Dim fromCell As Range, toCell As Range
-    Set fromCell = Me.Range(IncludeJobFrom_Answer)
-    Set toCell   = Me.Range(IncludeJobTo_Answer)
-
-    If Len(fromCell.Value2) = 0 Or Len(toCell.Value2) = 0 Then Exit Sub
-    If Not (IsDate(fromCell.Value) And IsDate(toCell.Value)) Then Exit Sub
-
-    Dim dFrom As Date, dTo As Date
-    dFrom = CDate(fromCell.Value)
-    dTo   = CDate(toCell.Value)
-
-    If dTo < dFrom Then
-        Application.EnableEvents = False
-        toCell.ClearContents
-        Application.EnableEvents = True
-    End If
-End Sub
-
-'-----------------------------
-' US m/d/(yy|yyyy) parser (after normalization)
-'-----------------------------
-Private Function TryParseUSDate(ByVal s As String, ByRef outDate As Date) As Boolean
-    Dim re As Object, m As Object
-    Set re = CreateObject("VBScript.RegExp")
-    re.Pattern = "^\s*(\d{1,2})/(\d{1,2})/(\d{2}|\d{4})\s*$"
-    re.IgnoreCase = True
-    re.Global = False
-
-    If Not re.Test(s) Then
-        TryParseUSDate = False
-        Exit Function
-    End If
-
-    Set m = re.Execute(s)(0)
-    Dim mm As Long, dd As Long, yy As Long
-    mm = CLng(m.SubMatches(0))
-    dd = CLng(m.SubMatches(1))
-    yy = CLng(m.SubMatches(2))
-
-    If mm < 1 Or mm > 12 Then GoTo Bad
-    If dd < 1 Or dd > 31 Then GoTo Bad
-
-    If Len(CStr(yy)) = 2 Then
-        If yy <= 29 Then
-            yy = 2000 + yy
-        Else
-            yy = 1900 + yy
-        End If
-    End If
-
-    On Error GoTo Bad
-    outDate = DateSerial(yy, mm, dd)
-    If Year(outDate) <> yy Or Month(outDate) <> mm Or Day(outDate) <> dd Then GoTo Bad
-
-    TryParseUSDate = True
-    Exit Function
-Bad:
-    TryParseUSDate = False
-End Function
-
-'-----------------------------
-' Allowed characters for date input
-'-----------------------------
-Private Function IsDateAllowedChars(ByVal s As String) As Boolean
-    Dim re As Object
-    Set re = CreateObject("VBScript.RegExp")
-    re.Pattern = "^[0-9/\-\s]+$"
-    re.IgnoreCase = True
-    re.Global = False
-    IsDateAllowedChars = re.Test(s)
-End Function
-
-'-----------------------------
 ' Sync derived variables with active data block
 '-----------------------------
 Private Sub UpdateDerivedVars()
@@ -408,16 +248,4 @@ Private Function ShiftedDataRange() As Range
     Set ShiftedDataRange = Me.Range( _
         AnswerColumn & ShiftedBaseRow & ":" & _
         AnswerColumn & (ShiftedBaseRow + DataBlockHeight - 1))
-End Function
-
-'-----------------------------
-' Build the current date-watch range
-'-----------------------------
-Private Function DateWatchRange() As Range
-    Dim r As Range
-    Set r = Me.Range(EffectiveDate_Answer)
-    If ExtraRowsPresent() Then
-        Set r = Union(r, Me.Range(IncludeJobDates))
-    End If
-    Set DateWatchRange = r
 End Function
