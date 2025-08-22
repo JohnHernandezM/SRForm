@@ -32,9 +32,11 @@ Private PremiumDisc As Double
 Private TierFactor As Double
 Private WaiverCharge As Double
 
-'=== NEW: dynamic answer addresses to avoid recomputing offsets ===
-Private CCRate_Answer As String   ' "C13" (normal) or "C15" (shifted)
-Private Payroll_Answer As String  ' "C14" (normal) or "C16" (shifted)
+'=== Dynamic addresses for visible inputs ===
+Private CCRate_Answer As String        ' "C13" (normal) or "C15" (shifted)
+Private Payroll_Answer As String       ' "C14" (normal) or "C16" (shifted)
+Private IncLimits_Answer As String     ' "C15" (normal) or "C17" (shifted)
+Private PremiumDisc_Answer As String   ' "C18" (normal) or "C20" (shifted)
 
 Private Sub Worksheet_Change(ByVal Target As Range)
     ' Keep our dynamic address vars up-to-date
@@ -118,17 +120,19 @@ CleanExit:
 End Sub
 
 '-----------------------------
-' Keep dynamic address vars for key inputs current
-' CCrate_Answer:  C13 (normal) / C15 (shifted)
-' Payroll_Answer: C14 (normal) / C16 (shifted)
+' Keep dynamic address vars current based on layout
 '-----------------------------
 Private Sub UpdateActiveAddressVars()
     If ExtraRowsPresent() Then
         CCRate_Answer = "C15"
         Payroll_Answer = "C16"
+        IncLimits_Answer = "C17"
+        PremiumDisc_Answer = "C20"
     Else
         CCRate_Answer = "C13"
         Payroll_Answer = "C14"
+        IncLimits_Answer = "C15"
+        PremiumDisc_Answer = "C18"
     End If
 End Sub
 
@@ -272,7 +276,7 @@ End Sub
 Private Sub ComputeAndWriteWaiverCharge()
     Dim baseRow As Long: baseRow = IIf(ExtraRowsPresent(), ShiftedBaseRow, NormalBaseRow)
 
-    ' Require visible CCRate/Payroll cells to be non-blank (C13/C14 or C15/C16)
+    ' Require visible CCRate/Payroll cells to be non-blank
     If Len(Me.Range(CCRate_Answer).Value2) = 0 Or _
        Len(Me.Range(Payroll_Answer).Value2) = 0 Then
         Me.Cells(baseRow + 10, AnswerColumn).ClearContents
@@ -294,48 +298,44 @@ End Sub
 ' Sync derived variables with active data block
 ' - NOTE on IncLimits rule:
 '     ">= 1 → value" only happens if the cell kept that value,
-'     which occurs when user chose Proceed in the popup.
-'     If they chose Edit, we clear the cell => becomes 1 via NzD.
+'     i.e., user chose Proceed in the popup. If they chose Edit,
+'     we clear the cell => becomes 1 via NzD.
 '-----------------------------
 Private Sub UpdateDerivedVars()
     Dim baseRow As Long
     baseRow = IIf(ExtraRowsPresent(), ShiftedBaseRow, NormalBaseRow)
 
-    ' These two use dynamic addresses (no offset math)
+    ' Use dynamic addresses for these
     CCRate      = NzD(Me.Range(CCRate_Answer).Value2)
     Payroll     = NzD(Me.Range(Payroll_Answer).Value2)
 
-    ' Others from the active block
+    ' Others from offsets
     CC          = NzD(Me.Cells(baseRow + 0, AnswerColumn).Value2)
+    ExMod       = NzD(Me.Cells(baseRow + 4, AnswerColumn).Value2)
+    SchMod      = NzD(Me.Cells(baseRow + 5, AnswerColumn).Value2)
+    TierFactor  = NzD(Me.Cells(baseRow + 7, AnswerColumn).Value2)
 
-    ' IncLimits (raw -> adjusted). Popup already enforced the >1 decision.
-    Dim incCell As Range, incRaw As Double
-    Set incCell = Me.Cells(baseRow + 3, AnswerColumn)
-    If Len(incCell.Value2) = 0 Then
+    ' IncLimits (raw -> adjusted) using its dynamic address
+    Dim incRaw As Double
+    If Len(Me.Range(IncLimits_Answer).Value2) = 0 Then
         IncLimits = 1#
     Else
-        incRaw = NzD(incCell.Value2)
+        incRaw = NzD(Me.Range(IncLimits_Answer).Value2)
         If incRaw < 1# Then
             IncLimits = 1# + incRaw
         Else
-            IncLimits = incRaw   ' this only persists if user clicked Proceed
+            IncLimits = incRaw   ' persists only if user clicked Proceed
         End If
     End If
 
-    ExMod       = NzD(Me.Cells(baseRow + 4, AnswerColumn).Value2)
-    SchMod      = NzD(Me.Cells(baseRow + 5, AnswerColumn).Value2)
-
-    ' PremiumDisc (raw -> adjusted)
-    Dim pdCell As Range, pdRaw As Double
-    Set pdCell = Me.Cells(baseRow + 6, AnswerColumn)
-    If Len(pdCell.Value2) = 0 Then
+    ' PremiumDisc (raw -> adjusted) using its dynamic address
+    Dim pdRaw As Double
+    If Len(Me.Range(PremiumDisc_Answer).Value2) = 0 Then
         PremiumDisc = 1#
     Else
-        pdRaw = NzD(pdCell.Value2)
+        pdRaw = NzD(Me.Range(PremiumDisc_Answer).Value2)
         PremiumDisc = 1# - pdRaw
     End If
-
-    TierFactor  = NzD(Me.Cells(baseRow + 7, AnswerColumn).Value2)
 End Sub
 
 '-----------------------------
@@ -389,6 +389,8 @@ End Function
 
 ' IncLimits input cell (C15 normal / C17 shifted)
 Private Function IncLimitsInputCell() As Range
-    Dim baseRow As Long: baseRow = IIf(ExtraRowsPresent(), ShiftedBaseRow, NormalBaseRow)
-    Set IncLimitsInputCell = Me.Cells(baseRow + 3, AnswerColumn)
+    If Len(IncLimits_Answer) = 0 Then
+        UpdateActiveAddressVars
+    End If
+    Set IncLimitsInputCell = Me.Range(IncLimits_Answer)
 End Function
