@@ -1,31 +1,31 @@
 '==========================
-' Build Comment – CASE 1 (C9 = No or blank)
+' Build Comment – CASE 1 (C9 = No/blank) and CASE 2 (C9 = Yes)
 '==========================
 Private Const WOS_Texas As Double = 0.05   ' 5% charge multiplier (final step only)
 
 ' Public so it can be assigned to the button
 Public Sub Build_Comment()
-    Dim msg As String, missing As String
     Dim ws As Worksheet: Set ws = Me
 
     ' Always required
     Dim reqAlways As Variant
     reqAlways = Array("C4", "C5", "C7", "C9")
+    Dim missing As String
     missing = MissingList(reqAlways)
 
     Dim c9 As String
     c9 = UCase$(Trim$(ws.Range("C9").Value2))
 
+    ' === Branch required fields by C9 ===
+    Dim reqCase As Variant
     If c9 = "YES" Then
-        ' CASE 2 will be added later
-        MsgBox "The 'Include Job = Yes' case will be implemented next.", vbInformation, "Build Comment"
-        Exit Sub
+        ' CASE 2 (shifted): require C10,C11,C14,C15,C16
+        reqCase = Array("C10", "C11", "C14", "C15", "C16")
+    Else
+        ' CASE 1 (normal): require C12,C13,C14
+        reqCase = Array("C12", "C13", "C14")
     End If
-
-    ' C9 = No (or blank): additional required
-    Dim reqNo As Variant
-    reqNo = Array("C12", "C13", "C14")
-    missing = AppendMissing(missing, MissingList(reqNo))
+    missing = AppendMissing(missing, MissingList(reqCase))
 
     If Len(missing) > 0 Then
         MsgBox "Cannot build the comment. The following required cells are missing:" & vbCrLf & missing, _
@@ -37,60 +37,123 @@ Public Sub Build_Comment()
     UpdateAddress_DynamicVars
     UpdateValues_AllVars
 
-    ' Read inputs
-    Dim sr As String: sr = CStr(ws.Range("C4").Value2)
-    Dim eff As String: eff = CStr(ws.Range("C5").Value2)
-    Dim namedIns As String: namedIns = CStr(ws.Range("C7").Value2)
+    ' Pull common fields
+    Dim sr As String:         sr = CStr(ws.Range("C4").Value2)
+    Dim eff As String:        eff = CStr(ws.Range("C5").Value2)
+    Dim namedIns As String:   namedIns = CStr(ws.Range("C7").Value2)
 
-    Dim cls As String: cls = CStr(ws.Range("C12").Value2)
-    Dim rate As Double: rate = CDbl(ws.Range("C13").Value2)
-    Dim payroll As Double: payroll = CDbl(ws.Range("C14").Value2)
-
-    ' Base waiver amount (full precision; display rounded only)
-    Dim WaiverAmount As Double, WaiverAmount_Old As Double
-    WaiverAmount = payroll * rate / 100#
-    WaiverAmount_Old = WaiverAmount
-
-    ' Build base sentence
     Dim s As String
-    s = "SR# " & sr & " - " & _
-        "Per Agent’s request, Added Specific Waiver of Subrogation with Effective Date: " & eff & _
-        " for " & namedIns & " | " & _
-        "Estimated Payroll: " & FmtCurrency0(payroll) & ", Class Code: " & cls & ", Class Code Rate: " & FmtDec3(rate) & " | " & _
-        FmtInt(payroll) & " x " & FmtDec3(rate) & " / 100 = " & FmtDec3(WaiverAmount)
+    Dim WaiverAmount As Double, WaiverAmount_Old As Double
 
-    ' Optional factors (append only if the cell is non-blank)
-    If IsNonBlank(ws.Range("C15")) Then
-        WaiverAmount = WaiverAmount_Old * IncLimits_Ans_Val
-        s = s & " x " & FmtDec3(IncLimits_Ans_Val) & " (Increased Limits) = " & FmtDec3(WaiverAmount)
-        WaiverAmount_Old = WaiverAmount
-    End If
+    If c9 = "YES" Then
+        ' ==========================
+        ' CASE 2 (Include Job = Yes)
+        ' ==========================
+        Dim jobFrom As String: jobFrom = CStr(ws.Range("C10").Value2)
+        Dim jobTo As String:   jobTo = CStr(ws.Range("C11").Value2)
 
-    If IsNonBlank(ws.Range("C16")) Then
-        WaiverAmount = WaiverAmount_Old * ExMod_Ans_Val
-        s = s & " x " & FmtDec3(ExMod_Ans_Val) & " (Experience Mod) = " & FmtDec3(WaiverAmount)
-        WaiverAmount_Old = WaiverAmount
-    End If
+        Dim cls2 As String:    cls2 = CStr(ws.Range("C14").Value2)            ' Class Code
+        Dim rate2 As Double:   rate2 = CDbl(ws.Range("C15").Value2)           ' Class Code Rate
+        Dim payroll2 As Double:payroll2 = CDbl(ws.Range("C16").Value2)        ' Estimated Payroll
 
-    If IsNonBlank(ws.Range("C17")) Then
-        WaiverAmount = WaiverAmount_Old * SchMod_Ans_Val
-        s = s & " x " & FmtDec3(SchMod_Ans_Val) & " (Schedule Mod) = " & FmtDec3(WaiverAmount)
+        ' Base waiver amount
+        WaiverAmount = payroll2 * rate2 / 100#
         WaiverAmount_Old = WaiverAmount
-    End If
 
-    If IsNonBlank(ws.Range("C18")) Then
-        Dim pdRaw As Double
-        pdRaw = Convert_Numeric_Double(ws.Range("C18").Value2, 0#) ' already constrained to (0,1)
-        WaiverAmount = WaiverAmount_Old * PremiumDisc_Ans_Val
-        s = s & " x " & FmtDec3(PremiumDisc_Ans_Val) & _
-                " (Premium Discount: 1.00 - " & FmtDec3(pdRaw) & " = " & FmtDec3(PremiumDisc_Ans_Val) & ") = " & FmtDec3(WaiverAmount)
-        WaiverAmount_Old = WaiverAmount
-    End If
+        ' Base string
+        s = "SR# " & sr & " - " & _
+            "Per Agent’s request, Added Specific Waiver of Subrogation with Effective Date: " & eff & _
+            " for " & namedIns & " | " & _
+            "Estimated Payroll: " & FmtCurrency0(payroll2) & ", Class Code: " & cls2 & _
+            ", Class Code Rate: " & FmtDec3(rate2) & ", Job Duration: " & jobFrom & " to " & jobTo & " | " & _
+            FmtInt(payroll2) & " x " & FmtDec3(rate2) & " / 100 = " & FmtDec3(WaiverAmount)
 
-    If IsNonBlank(ws.Range("C19")) Then
-        WaiverAmount = WaiverAmount_Old * TierFactor_Ans_Val
-        s = s & " x " & FmtDec3(TierFactor_Ans_Val) & " (Tier Factor) = " & FmtDec3(WaiverAmount)
+        ' Optional factors (shifted addresses)
+        If IsNonBlank(ws.Range("C17")) Then
+            WaiverAmount = WaiverAmount_Old * IncLimits_Ans_Val
+            s = s & " x " & FmtDec3(IncLimits_Ans_Val) & " (Increased Limits) = " & FmtDec3(WaiverAmount)
+            WaiverAmount_Old = WaiverAmount
+        End If
+
+        If IsNonBlank(ws.Range("C18")) Then
+            WaiverAmount = WaiverAmount_Old * ExMod_Ans_Val
+            s = s & " x " & FmtDec3(ExMod_Ans_Val) & " (Experience Mod) = " & FmtDec3(WaiverAmount)
+            WaiverAmount_Old = WaiverAmount
+        End If
+
+        If IsNonBlank(ws.Range("C19")) Then
+            WaiverAmount = WaiverAmount_Old * SchMod_Ans_Val
+            s = s & " x " & FmtDec3(SchMod_Ans_Val) & " (Schedule Mod) = " & FmtDec3(WaiverAmount)
+            WaiverAmount_Old = WaiverAmount
+        End If
+
+        If IsNonBlank(ws.Range("C20")) Then
+            Dim pdRaw2 As Double
+            pdRaw2 = Convert_Numeric_Double(ws.Range("C20").Value2, 0#) ' raw C20 for display
+            WaiverAmount = WaiverAmount_Old * PremiumDisc_Ans_Val
+            s = s & " x " & FmtDec3(PremiumDisc_Ans_Val) & _
+                    " (Premium Discount: 1.00 - " & FmtDec3(pdRaw2) & " = " & FmtDec3(PremiumDisc_Ans_Val) & ") = " & FmtDec3(WaiverAmount)
+            WaiverAmount_Old = WaiverAmount
+        End If
+
+        If IsNonBlank(ws.Range("C21")) Then
+            WaiverAmount = WaiverAmount_Old * TierFactor_Ans_Val
+            s = s & " x " & FmtDec3(TierFactor_Ans_Val) & " (Tier Factor) = " & FmtDec3(WaiverAmount)
+            WaiverAmount_Old = WaiverAmount
+        End If
+
+    Else
+        ' ==========================
+        ' CASE 1 (Include Job = No/blank)
+        ' ==========================
+        Dim cls1 As String:    cls1 = CStr(ws.Range("C12").Value2)            ' Class Code
+        Dim rate1 As Double:   rate1 = CDbl(ws.Range("C13").Value2)           ' Class Code Rate
+        Dim payroll1 As Double:payroll1 = CDbl(ws.Range("C14").Value2)        ' Estimated Payroll
+
+        ' Base waiver amount
+        WaiverAmount = payroll1 * rate1 / 100#
         WaiverAmount_Old = WaiverAmount
+
+        ' Base string
+        s = "SR# " & sr & " - " & _
+            "Per Agent’s request, Added Specific Waiver of Subrogation with Effective Date: " & eff & _
+            " for " & namedIns & " | " & _
+            "Estimated Payroll: " & FmtCurrency0(payroll1) & ", Class Code: " & cls1 & ", Class Code Rate: " & FmtDec3(rate1) & " | " & _
+            FmtInt(payroll1) & " x " & FmtDec3(rate1) & " / 100 = " & FmtDec3(WaiverAmount)
+
+        ' Optional factors (normal addresses)
+        If IsNonBlank(ws.Range("C15")) Then
+            WaiverAmount = WaiverAmount_Old * IncLimits_Ans_Val
+            s = s & " x " & FmtDec3(IncLimits_Ans_Val) & " (Increased Limits) = " & FmtDec3(WaiverAmount)
+            WaiverAmount_Old = WaiverAmount
+        End If
+
+        If IsNonBlank(ws.Range("C16")) Then
+            WaiverAmount = WaiverAmount_Old * ExMod_Ans_Val
+            s = s & " x " & FmtDec3(ExMod_Ans_Val) & " (Experience Mod) = " & FmtDec3(WaiverAmount)
+            WaiverAmount_Old = WaiverAmount
+        End If
+
+        If IsNonBlank(ws.Range("C17")) Then
+            WaiverAmount = WaiverAmount_Old * SchMod_Ans_Val
+            s = s & " x " & FmtDec3(SchMod_Ans_Val) & " (Schedule Mod) = " & FmtDec3(WaiverAmount)
+            WaiverAmount_Old = WaiverAmount
+        End If
+
+        If IsNonBlank(ws.Range("C18")) Then
+            Dim pdRaw1 As Double
+            pdRaw1 = Convert_Numeric_Double(ws.Range("C18").Value2, 0#) ' raw C18 for display
+            WaiverAmount = WaiverAmount_Old * PremiumDisc_Ans_Val
+            s = s & " x " & FmtDec3(PremiumDisc_Ans_Val) & _
+                    " (Premium Discount: 1.00 - " & FmtDec3(pdRaw1) & " = " & FmtDec3(PremiumDisc_Ans_Val) & ") = " & FmtDec3(WaiverAmount)
+            WaiverAmount_Old = WaiverAmount
+        End If
+
+        If IsNonBlank(ws.Range("C19")) Then
+            WaiverAmount = WaiverAmount_Old * TierFactor_Ans_Val
+            s = s & " x " & FmtDec3(TierFactor_Ans_Val) & " (Tier Factor) = " & FmtDec3(WaiverAmount)
+            WaiverAmount_Old = WaiverAmount
+        End If
     End If
 
     ' Final WOS step (multiply by 5%) — show integer result
