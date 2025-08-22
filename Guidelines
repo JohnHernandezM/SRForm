@@ -1,1 +1,235 @@
 
+Option Explicit
+
+'=== Address / position aliases ===
+Private Const IncludeJob        As String = "C9"
+Private Const NormalRange       As String = "C12:C19"
+Private Const ShiftedRange      As String = "C14:C21"
+Private Const NewRows           As String = "10:11"   ' rows to insert/delete
+Private Const ShiftedHeaderPos  As Long   = 13        ' table header row when shifted
+Private Const JobFrom           As String = "B10"     ' label cell: From:
+Private Const JobTo             As String = "B11"     ' label cell: To:
+
+'=== Variables kept in sync with the dynamic range ===
+Private CC As Double
+Private CCRate As Double
+Private Payroll As Double
+Private IncLimits As Double
+Private ExMod As Double
+Private SchMod As Double
+Private PremiumDisc As Double
+Private TierFactor As Double
+
+Private Sub Worksheet_Change(ByVal Target As Range)
+    ' 1) If C9 (IncludeJob) changed, handle structural toggle (and DV reapply) and refresh variables, then stop.
+    If Not Intersect(Target, Me.Range(IncludeJob)) Is Nothing Then
+        HandleC9Toggle
+        Exit Sub
+    End If
+
+    ' 2) Otherwise, watch ONLY the dynamic block.
+    Dim dataWatch As Range, hit As Range
+    If ExtraRowsPresent() Then
+        Set dataWatch = Me.Range(ShiftedRange)
+    Else
+        Set dataWatch = Me.Range(NormalRange)
+    End If
+
+    Set hit = Intersect(Target, dataWatch)
+    If hit Is Nothing Then Exit Sub
+
+    ' Numeric validation fallback and variable refresh
+    HandleDataChange hit
+    UpdateDerivedVars
+End Sub
+
+'-----------------------------
+' C9 -> toggle rows (NewRows) and enforce formats/content; also reapply DV on the active data block
+'-----------------------------
+Private Sub HandleC9Toggle()
+    On Error GoTo CleanExit
+    Dim prevEvents As Boolean, prevUpdate As Boolean
+    prevEvents = Application.EnableEvents
+    prevUpdate = Application.ScreenUpdating
+    Application.EnableEvents = False
+    Application.ScreenUpdating = False
+
+    Dim newVal As String
+    newVal = UCase$(Trim$(Me.Range(IncludeJob).Value2))
+
+    Dim haveExtra As Boolean
+    haveExtra = ExtraRowsPresent()
+
+    Select Case newVal
+        Case "YES"
+            If Not haveExtra Then
+                Me.Rows(NewRows).Insert Shift:=xlDown, CopyOrigin:=xlFormatFromLeftOrAbove
+            End If
+            SetupExtraRows
+            ApplyNumericValidationToCurrentDataBlock
+
+        Case "NO", vbNullString
+            If haveExtra Then
+                Me.Rows(NewRows).Delete Shift:=xlUp
+            End If
+            ApplyNumericValidationToCurrentDataBlock
+
+        Case Else
+            ' ignore
+    End Select
+
+    ' Refresh variables after any layout change
+    UpdateDerivedVars
+
+CleanExit:
+    Application.CutCopyMode = False
+    Application.ScreenUpdating = prevUpdate
+    Application.EnableEvents = prevEvents
+End Sub
+
+'-----------------------------
+' Detect whether the extra rows are present
+'   True  -> header has been pushed down to ShiftedHeaderPos
+'   False -> header at baseline (row 11)
+'-----------------------------
+Private Function ExtraRowsPresent() As Boolean
+    On Error GoTo FailSafe
+    Dim lo As ListObject
+    Set lo = Me.ListObjects("Calculator")
+    ExtraRowsPresent = (lo.HeaderRowRange.Row = ShiftedHeaderPos)
+    Exit Function
+FailSafe:
+    ExtraRowsPresent = False
+End Function
+
+'-----------------------------
+' Normalize newly added rows (labels, formats, and clear dropdowns)
+'-----------------------------
+Private Sub SetupExtraRows()
+    ' B10:B11: labels with B5's formatting
+    CopyFormats FromCell:=Me.Range("B5"), ToRange:=Me.Range(JobFrom & ":" & JobTo)
+    Me.Range(JobFrom).Value = "From:"
+    Me.Range(JobTo).Value = "To:"
+
+    ' C10:C11: empty, C5's formatting, ensure NO data validation remains
+    With Me.Range("C10:C11")
+        .ClearContents
+        On Error Resume Next
+        .Validation.Delete
+        On Error GoTo 0
+        CopyFormats FromCell:=Me.Range("C5"), ToRange:=.Cells
+    End With
+End Sub
+
+'-----------------------------
+' Copy only formats (no values)
+'-----------------------------
+Private Sub CopyFormats(ByVal FromCell As Range, ByVal ToRange As Range)
+    FromCell.Copy
+    ToRange.PasteSpecial Paste:=xlPasteFormats
+    Application.CutCopyMode = False
+End Sub
+
+'-----------------------------
+' Apply in-cell Data Validation to current data block (numbers only; decimals allowed)
+' Clears DV on BOTH potential ranges to avoid leftovers when layout flips.
+'-----------------------------
+Private Sub ApplyNumericValidationToCurrentDataBlock()
+    Dim rng As Range
+
+    ' Clear DV on both possible blocks
+    ClearDataValidationOnDataBlocks
+
+    If ExtraRowsPresent() Then
+        Set rng = Me.Range(ShiftedRange)
+    Else
+        Set rng = Me.Range(NormalRange)
+    End If
+
+    With rng.Validation
+        .Delete
+        ' Accept any real number; blanks allowed due to IgnoreBlank
+        .Add Type:=xlValidateDecimal, AlertStyle:=xlValidAlertStop, _
+             Operator:=xlBetween, Formula1:="-1E+308", Formula2:="1E+308"
+        .IgnoreBlank = True
+        .InCellDropdown = False
+        .ErrorTitle = "Only numbers allowed"
+        .ErrorMessage = "Please enter a number (decimals allowed)."
+        .ShowError = True
+    End With
+End Sub
+
+Private Sub ClearDataValidationOnDataBlocks()
+    On Error Resume Next
+    Me.Range(NormalRange).Validation.Delete
+    Me.Range(ShiftedRange).Validation.Delete
+    On Error GoTo 0
+End Sub
+
+'-----------------------------
+' Event fallback: enforce numeric-only in the changed cells
+' - Allows blanks
+' - If non-numeric is pasted/entered, clears the cell
+'-----------------------------
+Private Sub HandleDataChange(ByVal rngChanged As Range)
+    On Error GoTo CleanExit
+    Application.EnableEvents = False
+
+    Dim c As Range, v
+    For Each c In rngChanged.Cells
+        v = c.Value2
+        If Len(v) = 0 Then
+            ' allow blanks
+        ElseIf IsNumeric(v) Then
+            If VarType(v) = vbString Then
+                On Error Resume Next
+                c.Value = CDbl(v)
+                On Error GoTo 0
+            End If
+        Else
+            c.ClearContents
+        End If
+    Next c
+
+CleanExit:
+    Application.EnableEvents = True
+End Sub
+
+'-----------------------------
+' Keep variables in sync with the active data block
+' - Blanks are treated as 1 (safe default for math)
+'-----------------------------
+Private Sub UpdateDerivedVars()
+    Dim baseRow As Long
+    baseRow = IIf(ExtraRowsPresent(), 14, 12)
+
+    CC          = NzD(Me.Cells(baseRow + 0, "C").Value2) ' C12 or C14
+    CCRate      = NzD(Me.Cells(baseRow + 1, "C").Value2) ' C13 or C15
+    Payroll     = NzD(Me.Cells(baseRow + 2, "C").Value2) ' C14 or C16
+    IncLimits   = NzD(Me.Cells(baseRow + 3, "C").Value2) ' C15 or C17
+    ExMod       = NzD(Me.Cells(baseRow + 4, "C").Value2) ' C16 or C18
+    SchMod      = NzD(Me.Cells(baseRow + 5, "C").Value2) ' C17 or C19
+    PremiumDisc = NzD(Me.Cells(baseRow + 6, "C").Value2) ' C18 or C20
+    TierFactor  = NzD(Me.Cells(baseRow + 7, "C").Value2) ' C19 or C21
+End Sub
+
+' Convert a cell value to Double; blanks or non-numeric return default (now 1 by default)
+Private Function NzD(ByVal v As Variant, Optional ByVal defaultVal As Double = 1#) As Double
+    If IsError(v) Then
+        NzD = defaultVal
+    ElseIf IsEmpty(v) Then
+        NzD = defaultVal
+    ElseIf VarType(v) = vbString Then
+        If Trim$(v) = vbNullString Then
+            NzD = defaultVal
+        ElseIf IsNumeric(v) Then
+            NzD = CDbl(v)
+        Else
+            NzD = defaultVal
+        End If
+    ElseIf IsNumeric(v) Then
+        NzD = CDbl(v)
+    Else
+        NzD = defaultVal
+    End If
+End Function
