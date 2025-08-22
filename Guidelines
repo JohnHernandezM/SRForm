@@ -1,32 +1,34 @@
 Option Explicit
 
 '=== Address / position aliases ===
-Private Const IncludeJob        As String = "C9"
-Private Const NewRows           As String = "10:11"   ' rows to insert/delete
-Private Const ShiftedHeaderPos  As Long   = 13        ' table header row when shifted
-Private Const IncludeJobFrom    As String = "B10"     ' label cell: From:
-Private Const IncludeJobTo      As String = "B11"     ' label cell: To:
+Private Const IncludeJob_Answer       As String = "C9"
+Private Const NewRows                 As String = "10:11"   ' rows to insert/delete
+Private Const ShiftedHeaderPos        As Long   = 13        ' table header row when shifted
+Private Const IncludeJobFrom_Label    As String = "B10"     ' label cell: From:
+Private Const IncludeJobTo_Label      As String = "B11"     ' label cell: To:
+Private Const IncludeJobFrom_Answer   As String = "C10"     ' answer cell: From date
+Private Const IncludeJobTo_Answer     As String = "C11"     ' answer cell: To date
 
 '=== Base rows for calculations ===
-Private Const NormalBaseRow     As Long = 12          ' first row of data block in normal layout
-Private Const ShiftedBaseRow    As Long = 14          ' first row of data block in shifted layout
+Private Const NormalBaseRow           As Long = 12          ' first row of data block in normal layout
+Private Const ShiftedBaseRow          As Long = 14          ' first row of data block in shifted layout
 
 '=== Format anchors ===
-Private Const UseHeaderFormat   As String = "B5"      ' reference cell for header formatting
-Private Const UseAnswerFormat   As String = "C5"      ' reference cell for answer formatting
-Private Const IncludeJobDates   As String = "C10:C11" ' range for From/To job dates (only present if YES in C9)
+Private Const ReferenceFormat_Header  As String = "B5"      ' reference cell for header formatting
+Private Const ReferenceFormat_Answer  As String = "C5"      ' reference cell for answer formatting
+Private Const IncludeJobDates         As String = "C10:C11" ' range for From/To job dates (only present if YES in C9)
 
 '=== Column reference ===
-Private Const AnswerColumn      As String = "C"       ' all answers are in this column
+Private Const AnswerColumn            As String = "C"       ' all answers are in this column
 
 '=== Data block settings ===
-Private Const DataBlockHeight   As Long = 8           ' number of rows in each data block
+Private Const DataBlockHeight         As Long = 8           ' number of rows in each data block
 
 '=== Date validation settings ===
-Private Const EffectiveDateCell As String = "C5"      ' main date input
-Private Const DateOutputFormat  As String = "mm/dd/yyyy"
-Private Const MinAllowedDate    As Date = #1/1/1950#
-Private Const MaxAllowedDate    As Date = #12/31/2099#
+Private Const EffectiveDate_Answer    As String = "C5"      ' main date input
+Private Const DateOutputFormat        As String = "mm/dd/yyyy"
+Private Const MinAllowedDate          As Date = #1/1/1950#
+Private Const MaxAllowedDate          As Date = #12/31/2099#
 
 '=== Variables kept in sync with the dynamic range ===
 Private CC As Double
@@ -40,7 +42,7 @@ Private TierFactor As Double
 
 Private Sub Worksheet_Change(ByVal Target As Range)
     ' 1) IncludeJob (C9) toggle
-    If Not Intersect(Target, Me.Range(IncludeJob)) Is Nothing Then
+    If Not Intersect(Target, Me.Range(IncludeJob_Answer)) Is Nothing Then
         HandleC9Toggle
         Exit Sub
     End If
@@ -81,7 +83,7 @@ Private Sub HandleC9Toggle()
     Application.ScreenUpdating = False
 
     Dim newVal As String
-    newVal = UCase$(Trim$(Me.Range(IncludeJob).Value2))
+    newVal = UCase$(Trim$(Me.Range(IncludeJob_Answer).Value2))
 
     Dim haveExtra As Boolean
     haveExtra = ExtraRowsPresent()
@@ -131,9 +133,9 @@ End Function
 '-----------------------------
 Private Sub SetupExtraRows()
     ' Labels
-    CopyFormats FromCell:=Me.Range(UseHeaderFormat), ToRange:=Me.Range(IncludeJobFrom & ":" & IncludeJobTo)
-    Me.Range(IncludeJobFrom).Value = "From:"
-    Me.Range(IncludeJobTo).Value = "To:"
+    CopyFormats FromCell:=Me.Range(ReferenceFormat_Header), ToRange:=Me.Range(IncludeJobFrom_Label & ":" & IncludeJobTo_Label)
+    Me.Range(IncludeJobFrom_Label).Value = "From:"
+    Me.Range(IncludeJobTo_Label).Value = "To:"
 
     ' Date inputs
     With Me.Range(IncludeJobDates)
@@ -141,7 +143,7 @@ Private Sub SetupExtraRows()
         On Error Resume Next
         .Validation.Delete
         On Error GoTo 0
-        CopyFormats FromCell:=Me.Range(UseAnswerFormat), ToRange:=.Cells
+        CopyFormats FromCell:=Me.Range(ReferenceFormat_Answer), ToRange:=.Cells
     End With
 End Sub
 
@@ -150,7 +152,7 @@ End Sub
 '-----------------------------
 Private Sub EnsureDateFormats()
     On Error Resume Next
-    Me.Range(EffectiveDateCell).NumberFormat = DateOutputFormat
+    Me.Range(EffectiveDate_Answer).NumberFormat = DateOutputFormat
     If ExtraRowsPresent() Then
         Me.Range(IncludeJobDates).NumberFormat = DateOutputFormat
     End If
@@ -167,7 +169,7 @@ Private Sub CopyFormats(ByVal FromCell As Range, ByVal ToRange As Range)
 End Sub
 
 '-----------------------------
-' Apply numeric Data Validation to active data block
+' Apply numeric Data Validation to active data block (no alerts)
 '-----------------------------
 Private Sub ApplyNumericValidationToCurrentDataBlock()
     Dim rng As Range
@@ -181,13 +183,10 @@ Private Sub ApplyNumericValidationToCurrentDataBlock()
 
     With rng.Validation
         .Delete
-        .Add Type:=xlValidateDecimal, AlertStyle:=xlValidAlertStop, _
-             Operator:=xlBetween, Formula1:="-1E+308", Formula2:="1E+308"
+        .Add Type:=xlValidateDecimal, Operator:=xlBetween, Formula1:="-1E+308", Formula2:="1E+308"
         .IgnoreBlank = True
         .InCellDropdown = False
-        .ErrorTitle = "Only numbers allowed"
-        .ErrorMessage = "Please enter a number (decimals allowed)."
-        .ShowError = True
+        ' No ErrorTitle / ErrorMessage / AlertStyle / ShowError
     End With
 End Sub
 
@@ -199,7 +198,7 @@ Private Sub ClearDataValidationOnDataBlocks()
 End Sub
 
 '-----------------------------
-' Numeric block fallback enforcement
+' Numeric block fallback enforcement (silent)
 '-----------------------------
 Private Sub HandleDataChange(ByVal rngChanged As Range)
     On Error GoTo CleanExit
@@ -226,10 +225,7 @@ CleanExit:
 End Sub
 
 '-----------------------------
-' Date input handler (C5 and C10:C11 if present)
-'   - Accept 8 US m/d formats; "-" and spaces allowed (normalized)
-'   - Only digits, "/", "-", spaces allowed
-'   - Normalize to mm/dd/yyyy and enforce [1950..2099]
+' Date input handler (C5 and C10:C11 if present) — silent validation
 '-----------------------------
 Private Sub HandleDateChange(ByVal rngChanged As Range)
     On Error GoTo CleanExit
@@ -260,6 +256,7 @@ Private Sub HandleDateChange(ByVal rngChanged As Range)
                 GoTo NextCell
             End If
 
+            ' normalize dashes/spaces to slashes & trim
             sNorm = Replace(Replace(Trim$(s), "-", "/"), " ", "")
 
             If TryParseUSDate(sNorm, d) Then
@@ -281,16 +278,14 @@ CleanExit:
 End Sub
 
 '-----------------------------
-' Enforce that, when present and both filled, C11 >= C10
-'   - If C11 < C10: show error and clear C11
-'   - If C11 = C10: valid (no action)
+' Enforce C11 >= C10 silently
 '-----------------------------
 Private Sub EnforceJobDateOrder()
     If Not ExtraRowsPresent() Then Exit Sub
 
     Dim fromCell As Range, toCell As Range
-    Set fromCell = Me.Range("C10")
-    Set toCell   = Me.Range("C11")
+    Set fromCell = Me.Range(IncludeJobFrom_Answer)
+    Set toCell   = Me.Range(IncludeJobTo_Answer)
 
     If Len(fromCell.Value2) = 0 Or Len(toCell.Value2) = 0 Then Exit Sub
     If Not (IsDate(fromCell.Value) And IsDate(toCell.Value)) Then Exit Sub
@@ -301,14 +296,13 @@ Private Sub EnforceJobDateOrder()
 
     If dTo < dFrom Then
         Application.EnableEvents = False
-        MsgBox "The To date (C11) must be on or after the From date (C10).", vbExclamation, "Invalid Date Range"
         toCell.ClearContents
         Application.EnableEvents = True
     End If
 End Sub
 
 '-----------------------------
-' US m/d/(yy|yyyy) parser (8 combos after normalization to "/")
+' US m/d/(yy|yyyy) parser (after normalization)
 '-----------------------------
 Private Function TryParseUSDate(ByVal s As String, ByRef outDate As Date) As Boolean
     Dim re As Object, m As Object
@@ -328,8 +322,8 @@ Private Function TryParseUSDate(ByVal s As String, ByRef outDate As Date) As Boo
     dd = CLng(m.SubMatches(1))
     yy = CLng(m.SubMatches(2))
 
-    If mm < 1 Or mm > 12 Then Go To Bad
-    If dd < 1 Or dd > 31 Then Go To Bad
+    If mm < 1 Or mm > 12 Then GoTo Bad
+    If dd < 1 Or dd > 31 Then GoTo Bad
 
     If Len(CStr(yy)) = 2 Then
         If yy <= 29 Then
@@ -341,7 +335,7 @@ Private Function TryParseUSDate(ByVal s As String, ByRef outDate As Date) As Boo
 
     On Error GoTo Bad
     outDate = DateSerial(yy, mm, dd)
-    If Year(outDate) <> yy Or Month(outDate) <> mm Or Day(outDate) <> dd Then Go To Bad
+    If Year(outDate) <> yy Or Month(outDate) <> mm Or Day(outDate) <> dd Then GoTo Bad
 
     TryParseUSDate = True
     Exit Function
@@ -350,7 +344,7 @@ Bad:
 End Function
 
 '-----------------------------
-' Allowed characters for date input: digits, "/", "-", spaces
+' Allowed characters for date input
 '-----------------------------
 Private Function IsDateAllowedChars(ByVal s As String) As Boolean
     Dim re As Object
@@ -417,11 +411,11 @@ Private Function ShiftedDataRange() As Range
 End Function
 
 '-----------------------------
-' Build the current date-watch range: always C5, plus C10:C11 when present
+' Build the current date-watch range
 '-----------------------------
 Private Function DateWatchRange() As Range
     Dim r As Range
-    Set r = Me.Range(EffectiveDateCell)
+    Set r = Me.Range(EffectiveDate_Answer)
     If ExtraRowsPresent() Then
         Set r = Union(r, Me.Range(IncludeJobDates))
     End If
