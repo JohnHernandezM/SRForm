@@ -1,4 +1,3 @@
-
 Option Explicit
 
 '=== Address / position aliases ===
@@ -7,8 +6,17 @@ Private Const NormalRange       As String = "C12:C19"
 Private Const ShiftedRange      As String = "C14:C21"
 Private Const NewRows           As String = "10:11"   ' rows to insert/delete
 Private Const ShiftedHeaderPos  As Long   = 13        ' table header row when shifted
-Private Const JobFrom           As String = "B10"     ' label cell: From:
-Private Const JobTo             As String = "B11"     ' label cell: To:
+Private Const IncludeJobFrom    As String = "B10"     ' label cell: From:
+Private Const IncludeJobTo      As String = "B11"     ' label cell: To:
+
+'=== Base rows for calculations ===
+Private Const NormalBaseRow     As Long = 12          ' first row of data block in normal layout
+Private Const ShiftedBaseRow    As Long = 14          ' first row of data block in shifted layout
+
+'=== Format anchors ===
+Private Const UseHeaderFormat   As String = "B5"      ' reference cell for header formatting
+Private Const UseAnswerFormat   As String = "C5"      ' reference cell for answer formatting
+Private Const IncludeJobDates   As String = "C10:C11" ' range for From/To job dates (only present if YES in C9)
 
 '=== Variables kept in sync with the dynamic range ===
 Private CC As Double
@@ -21,13 +29,14 @@ Private PremiumDisc As Double
 Private TierFactor As Double
 
 Private Sub Worksheet_Change(ByVal Target As Range)
-    ' 1) If C9 (IncludeJob) changed, handle structural toggle (and DV reapply) and refresh variables, then stop.
+    ' 1) If IncludeJob (C9) changed → handle toggle (insert/delete job rows),
+    '    reapply numeric DV on active data block, refresh variables, then stop.
     If Not Intersect(Target, Me.Range(IncludeJob)) Is Nothing Then
         HandleC9Toggle
         Exit Sub
     End If
 
-    ' 2) Otherwise, watch ONLY the dynamic block.
+    ' 2) Otherwise, watch ONLY the active data block (NormalRange or ShiftedRange).
     Dim dataWatch As Range, hit As Range
     If ExtraRowsPresent() Then
         Set dataWatch = Me.Range(ShiftedRange)
@@ -38,13 +47,17 @@ Private Sub Worksheet_Change(ByVal Target As Range)
     Set hit = Intersect(Target, dataWatch)
     If hit Is Nothing Then Exit Sub
 
-    ' Numeric validation fallback and variable refresh
+    ' Enforce numeric-only (fallback) and refresh derived variables
     HandleDataChange hit
     UpdateDerivedVars
 End Sub
 
 '-----------------------------
-' C9 -> toggle rows (NewRows) and enforce formats/content; also reapply DV on the active data block
+' Handle toggle of IncludeJob (C9):
+'   - Insert/delete NewRows (10:11)
+'   - Normalize labels/dates rows if inserted
+'   - Reapply numeric DV to active data block
+'   - Refresh derived variables
 '-----------------------------
 Private Sub HandleC9Toggle()
     On Error GoTo CleanExit
@@ -78,7 +91,7 @@ Private Sub HandleC9Toggle()
             ' ignore
     End Select
 
-    ' Refresh variables after any layout change
+    ' Refresh derived variables after layout change
     UpdateDerivedVars
 
 CleanExit:
@@ -88,9 +101,9 @@ CleanExit:
 End Sub
 
 '-----------------------------
-' Detect whether the extra rows are present
-'   True  -> header has been pushed down to ShiftedHeaderPos
-'   False -> header at baseline (row 11)
+' Detect whether extra rows (10:11) are present
+'   True  -> header row pushed down to ShiftedHeaderPos (row 13)
+'   False -> header row at baseline (row 11)
 '-----------------------------
 Private Function ExtraRowsPresent() As Boolean
     On Error GoTo FailSafe
@@ -103,21 +116,26 @@ FailSafe:
 End Function
 
 '-----------------------------
-' Normalize newly added rows (labels, formats, and clear dropdowns)
+' Normalize newly added rows:
+'   - IncludeJobFrom (B10) = "From:"
+'   - IncludeJobTo (B11)   = "To:"
+'   - Apply UseHeaderFormat formatting to B10:B11
+'   - Clear contents + remove DV on IncludeJobDates (C10:C11)
+'   - Apply UseAnswerFormat formatting to C10:C11
 '-----------------------------
 Private Sub SetupExtraRows()
-    ' B10:B11: labels with B5's formatting
-    CopyFormats FromCell:=Me.Range("B5"), ToRange:=Me.Range(JobFrom & ":" & JobTo)
-    Me.Range(JobFrom).Value = "From:"
-    Me.Range(JobTo).Value = "To:"
+    ' Label cells with header formatting
+    CopyFormats FromCell:=Me.Range(UseHeaderFormat), ToRange:=Me.Range(IncludeJobFrom & ":" & IncludeJobTo)
+    Me.Range(IncludeJobFrom).Value = "From:"
+    Me.Range(IncludeJobTo).Value = "To:"
 
-    ' C10:C11: empty, C5's formatting, ensure NO data validation remains
-    With Me.Range("C10:C11")
+    ' Date input cells: reset contents, formatting, and DV
+    With Me.Range(IncludeJobDates)
         .ClearContents
         On Error Resume Next
         .Validation.Delete
         On Error GoTo 0
-        CopyFormats FromCell:=Me.Range("C5"), ToRange:=.Cells
+        CopyFormats FromCell:=Me.Range(UseAnswerFormat), ToRange:=.Cells
     End With
 End Sub
 
@@ -131,8 +149,9 @@ Private Sub CopyFormats(ByVal FromCell As Range, ByVal ToRange As Range)
 End Sub
 
 '-----------------------------
-' Apply in-cell Data Validation to current data block (numbers only; decimals allowed)
-' Clears DV on BOTH potential ranges to avoid leftovers when layout flips.
+' Apply numeric Data Validation to active data block
+'   - Clears DV on both NormalRange & ShiftedRange to prevent leftovers
+'   - Applies decimal DV rule allowing any real number (blanks allowed)
 '-----------------------------
 Private Sub ApplyNumericValidationToCurrentDataBlock()
     Dim rng As Range
@@ -167,9 +186,11 @@ Private Sub ClearDataValidationOnDataBlocks()
 End Sub
 
 '-----------------------------
-' Event fallback: enforce numeric-only in the changed cells
-' - Allows blanks
-' - If non-numeric is pasted/entered, clears the cell
+' Fallback event check:
+'   - Enforce numeric-only in changed cells
+'   - Allows blanks
+'   - Coerces numeric strings to numbers
+'   - Clears non-numeric values
 '-----------------------------
 Private Sub HandleDataChange(ByVal rngChanged As Range)
     On Error GoTo CleanExit
@@ -196,24 +217,29 @@ CleanExit:
 End Sub
 
 '-----------------------------
-' Keep variables in sync with the active data block
-' - Blanks are treated as 1 (safe default for math)
+' Sync derived variables with active data block
+'   - Chooses baseRow = NormalBaseRow (12) or ShiftedBaseRow (14)
+'   - Blanks/non-numeric treated as 1 (safe default)
 '-----------------------------
 Private Sub UpdateDerivedVars()
     Dim baseRow As Long
-    baseRow = IIf(ExtraRowsPresent(), 14, 12)
+    baseRow = IIf(ExtraRowsPresent(), ShiftedBaseRow, NormalBaseRow)
 
-    CC          = NzD(Me.Cells(baseRow + 0, "C").Value2) ' C12 or C14
-    CCRate      = NzD(Me.Cells(baseRow + 1, "C").Value2) ' C13 or C15
-    Payroll     = NzD(Me.Cells(baseRow + 2, "C").Value2) ' C14 or C16
-    IncLimits   = NzD(Me.Cells(baseRow + 3, "C").Value2) ' C15 or C17
-    ExMod       = NzD(Me.Cells(baseRow + 4, "C").Value2) ' C16 or C18
-    SchMod      = NzD(Me.Cells(baseRow + 5, "C").Value2) ' C17 or C19
-    PremiumDisc = NzD(Me.Cells(baseRow + 6, "C").Value2) ' C18 or C20
-    TierFactor  = NzD(Me.Cells(baseRow + 7, "C").Value2) ' C19 or C21
+    CC          = NzD(Me.Cells(baseRow + 0, "C").Value2) ' NormalBaseRow/ShiftedBaseRow
+    CCRate      = NzD(Me.Cells(baseRow + 1, "C").Value2)
+    Payroll     = NzD(Me.Cells(baseRow + 2, "C").Value2)
+    IncLimits   = NzD(Me.Cells(baseRow + 3, "C").Value2)
+    ExMod       = NzD(Me.Cells(baseRow + 4, "C").Value2)
+    SchMod      = NzD(Me.Cells(baseRow + 5, "C").Value2)
+    PremiumDisc = NzD(Me.Cells(baseRow + 6, "C").Value2)
+    TierFactor  = NzD(Me.Cells(baseRow + 7, "C").Value2)
 End Sub
 
-' Convert a cell value to Double; blanks or non-numeric return default (now 1 by default)
+'-----------------------------
+' Utility: Convert to Double
+'   - Errors, blanks, empty strings → defaultVal (1 by default)
+'   - Numeric strings/numbers → coerced to Double
+'-----------------------------
 Private Function NzD(ByVal v As Variant, Optional ByVal defaultVal As Double = 1#) As Double
     If IsError(v) Then
         NzD = defaultVal
