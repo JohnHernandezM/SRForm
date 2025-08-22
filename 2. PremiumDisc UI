@@ -4,23 +4,33 @@ Public ChosenProceed As Boolean
 
 Public Sub Setup(ByVal val As Double)
     Dim vTxt As String
-    vTxt = Format$(val, "0.################") ' show what the user typed (up to many decimals)
+    vTxt = Format$(val, "0.################")
 
     Me.Caption = "Confirm Premium Discount"
-    Me.lblMessage.Caption = "Ensure that you enter the value currently displayed in CLS (do not use ""1 - [value]"")."
+    Me.lblMessage.Caption = _
+        "Ensure that you enter the value currently displayed in CLS (do not use ""1 - [value]"")."
 
-    Me.cmdProceed.Caption = "Proceed with " & vTxt & " for Premium Discount."
-    Me.cmdEdit.Caption = "Edit Premium Discount"
+    Me.btnProceed.Caption = "Proceed with " & vTxt & " for Premium Discount."
+    Me.btnEdit.Caption = "Edit Premium Discount"
 
+    ' default state if user closes without choosing
     Me.ChosenProceed = False
 End Sub
 
-Private Sub cmdProceed_Click()
+Private Sub btnProceed_Click()
     Me.ChosenProceed = True
     Me.Hide
 End Sub
 
-Private Sub cmdEdit_Click()
+Private Sub btnEdit_Click()
     Me.ChosenProceed = False
     Me.Hide
+End Sub
+
+' Treat window close [X] the same as clicking Edit
+Private Sub UserForm_QueryClose(Cancel As Integer, CloseMode As Integer)
+    If CloseMode = vbFormControlMenu Then
+        Me.ChosenProceed = False
+        ' allow the form to close
+    End If
 End Sub
