@@ -1,34 +1,21 @@
-Option Explicit
-
-Public ChosenProceed As Boolean
-
 Public Sub Setup(ByVal val As Double)
     Dim vTxt As String
-    vTxt = Format$(val, "0.################")  ' shows 3 or 9.8 etc.
+
+    ' If integer → no decimals; else show up to many decimals without trailing dot
+    If val = Fix(val) Then
+        vTxt = Format$(val, "0")
+    Else
+        vTxt = Format$(val, "0.################")
+    End If
+    If Right$(vTxt, 1) = "." Then vTxt = Left$(vTxt, Len(vTxt) - 1)
 
     Me.Caption = "Confirm Increased Limits"
     Me.lblMessage.Caption = _
         "Ensure that you enter the value currently displayed in CLS (do not increment it by 1)."
 
-    ' No trailing period:
+    ' Button labels (no trailing period)
     Me.btnProceed.Caption = "Proceed with " & vTxt
     Me.btnEdit.Caption = "Edit Increased Limits value."
 
     Me.ChosenProceed = False
-End Sub
-
-Private Sub btnProceed_Click()
-    Me.ChosenProceed = True
-    Me.Hide
-End Sub
-
-Private Sub btnEdit_Click()
-    Me.ChosenProceed = False
-    Me.Hide
-End Sub
-
-Private Sub UserForm_QueryClose(Cancel As Integer, CloseMode As Integer)
-    If CloseMode = vbFormControlMenu Then
-        Me.ChosenProceed = False  ' X behaves like Edit
-    End If
 End Sub
