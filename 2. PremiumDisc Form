@@ -1,0 +1,665 @@
+Option Explicit
+
+'=== Address / position aliases (fixed addresses) ===
+Private Const IncludeJob_Ans_Add     As String = "C9"
+Private Const IncludeJobFrom_Lbl_Add As String = "B10"     ' label address: From:
+Private Const IncludeJobTo_Lbl_Add   As String = "B11"     ' label address: To:
+Private Const IncludeJobFrom_Ans_Add As String = "C10"     ' answer address: From date
+Private Const IncludeJobTo_Ans_Add   As String = "C11"     ' answer address: To date
+Private Const EffectiveDate_Ans_Add  As String = "C5"      ' answer address: Effective date
+
+'=== Base rows for calculations (top row of active data block) ===
+Private Const Normal_BaseRow         As Long = 12          ' first row of data block in normal layout
+Private Const Shifted_BaseRow        As Long = 14          ' first row of data block in shifted layout
+
+'=== Format anchors (reference addresses for formatting) ===
+Private Const RefFormat_Header_Add   As String = "B5"      ' reference address for header formatting
+Private Const RefFormat_Answer_Add   As String = "C5"      ' reference address for answer formatting
+
+'=== Column reference ===
+Private Const Answer_Col             As String = "C"       ' all answers live in this column
+
+'=== Data block settings ===
+Private Const WaiverFactors_Height   As Long = 8           ' number of rows in each data block
+
+'=== Synced variables (module-level); blanks default to 1 via Convert_Numeric_Double ===
+Private CC_Ans_Val As Double
+Private CCRate_Ans_Val As Double
+Private Payroll_Ans_Val As Double
+Private IncLimits_Ans_Val As Double
+Private ExMod_Ans_Val As Double
+Private SchMod_Ans_Val As Double
+Private PremiumDisc_Ans_Val As Double
+Private TierFactor_Ans_Val As Double
+Private WaiverCharge_Ans_Val As Double
+
+'=== Dynamic addresses for visible inputs (kept current by UpdateAddress_DynamicVars) ===
+Private CCRate_Ans_Add As String       ' "C13" (normal) or "C15" (shifted)
+Private Payroll_Ans_Add As String      ' "C14" (normal) or "C16" (shifted)
+Private IncLimits_Ans_Add As String    ' "C15" (normal) or "C17" (shifted)
+Private PremiumDisc_Ans_Add As String  ' "C18" (normal) or "C20" (shifted)
+
+Private Sub Worksheet_Change(ByVal Target As Range)
+    ' Ensure date-entry cells are treated as text (prevents Excel auto-coercion)
+    Ensure_DateCells_TextFormat
+
+    ' Keep dynamic address variables in sync with current layout
+    UpdateAddress_DynamicVars
+
+    ' 1) IncludeJob (C9) changed → handle structure and DV, then recalc
+    If Not Intersect(Target, Me.Range(IncludeJob_Ans_Add)) Is Nothing Then
+        Handle_IncludeJob
+        UpdateAddress_DynamicVars
+        UpdateValues_AllVars
+        Compute_WaiverCharge
+        Exit Sub
+    End If
+
+    ' 1b) Per-cell DATE validation + normalization: C5 always; C10/C11 only when shown
+    Dim watchDate As Range, hit As Range, c As Range
+
+    ' C5
+    Set watchDate = Me.Range(EffectiveDate_Ans_Add)
+    Set hit = Intersect(Target, watchDate)
+    If Not hit Is Nothing Then
+        For Each c In hit.Cells
+            Validate_DateCell c
+            Normalize_DateCellDisplay c
+        Next c
+    End If
+
+    ' C10:C11 when extra rows are present
+    If Check_ExtraRowsPresent() Then
+        Set watchDate = Me.Range(IncludeJobFrom_Ans_Add & ":" & IncludeJobTo_Ans_Add)
+        Set hit = Intersect(Target, watchDate)
+        If Not hit Is Nothing Then
+            For Each c In hit.Cells
+                Validate_DateCell c
+                Normalize_DateCellDisplay c
+            Next c
+            ' After individual validation/normalization, enforce C11 >= C10 (both must be non-blank)
+            Validate_JobDateOrder
+        End If
+    End If
+
+    ' 1c) PremiumDisc confirmation: if 0 < value < 1 → ask user to Proceed/Edit; else clear if outside range
+    If Not Intersect(Target, Me.Range(PremiumDisc_Ans_Add)) Is Nothing Then
+        Handle_PremiumDisc Me.Range(PremiumDisc_Ans_Add)
+    End If
+
+    ' 2) If IncLimits input address changed (C15 normal / C17 shifted) and > 1 → show Proceed/Edit popup
+    If Not Intersect(Target, Me.Range(IncLimits_Ans_Add)) Is Nothing Then
+        Handle_IncLimits Me.Range(IncLimits_Ans_Add)
+    End If
+
+    ' 3) Numeric data block edits (Normal/Shifted)
+    Dim dataWatch As Range, hitNum As Range
+    If Check_ExtraRowsPresent() Then
+        Set dataWatch = Shifted_DataRange()
+    Else
+        Set dataWatch = Normal_DataRange()
+    End If
+
+    Set hitNum = Intersect(Target, dataWatch)
+    If hitNum Is Nothing Then Exit Sub
+
+    ' Enforce numeric-only and > 0 silently, then refresh values and compute
+    Handle_DataChange hitNum
+    UpdateValues_AllVars
+    Compute_WaiverCharge
+End Sub
+
+'-----------------------------
+' Handle_IncludeJob — responds to IncludeJob (C9) changes:
+' - YES: insert extra rows (labels C10/C11), format, and reapply DV
+' - NO/blank: remove extra rows and reapply DV
+'-----------------------------
+Private Sub Handle_IncludeJob()
+    On Error GoTo CleanExit
+    Dim prevEvents As Boolean, prevUpdate As Boolean
+    prevEvents = Application.EnableEvents
+    prevUpdate = Application.ScreenUpdating
+    Application.EnableEvents = False
+    Application.ScreenUpdating = False
+
+    Dim newVal As String
+    newVal = UCase$(Trim$(Me.Range(IncludeJob_Ans_Add).Value2))
+
+    Dim haveExtra As Boolean
+    haveExtra = Check_ExtraRowsPresent()
+
+    Select Case newVal
+        Case "YES"
+            If Not haveExtra Then
+                IncludeJob_Y_RowsRange().Insert Shift:=xlDown, CopyOrigin:=xlFormatFromLeftOrAbove
+            End If
+            Set_ExtraRows
+            Apply_NumericValidation_WaiverFactors
+
+        Case "NO", vbNullString
+            If haveExtra Then
+                IncludeJob_Y_RowsRange().Delete Shift:=xlUp
+            End If
+            Apply_NumericValidation_WaiverFactors
+
+        Case Else
+            ' ignore
+    End Select
+
+CleanExit:
+    Application.CutCopyMode = False
+    Application.ScreenUpdating = prevUpdate
+    Application.EnableEvents = prevEvents
+End Sub
+
+'-----------------------------
+' UpdateAddress_DynamicVars — set input address strings for current layout
+'  CCRate_Ans_Add:      C13 (normal) / C15 (shifted)
+'  Payroll_Ans_Add:     C14 (normal) / C16 (shifted)
+'  IncLimits_Ans_Add:   C15 (normal) / C17 (shifted)
+'  PremiumDisc_Ans_Add: C18 (normal) / C20 (shifted)
+'-----------------------------
+Private Sub UpdateAddress_DynamicVars()
+    If Check_ExtraRowsPresent() Then
+        CCRate_Ans_Add      = "C15"
+        Payroll_Ans_Add     = "C16"
+        IncLimits_Ans_Add   = "C17"
+        PremiumDisc_Ans_Add = "C20"
+    Else
+        CCRate_Ans_Add      = "C13"
+        Payroll_Ans_Add     = "C14"
+        IncLimits_Ans_Add   = "C15"
+        PremiumDisc_Ans_Add = "C18"
+    End If
+End Sub
+
+'-----------------------------
+' Check_ExtraRowsPresent — True if table header is at Shifted_BaseRow - 1 (i.e., extra rows inserted)
+'-----------------------------
+Private Function Check_ExtraRowsPresent() As Boolean
+    On Error GoTo FailSafe
+    Dim lo As ListObject
+    Set lo = Me.ListObjects("Calculator")
+    Check_ExtraRowsPresent = (lo.HeaderRowRange.Row = (Shifted_BaseRow - 1))
+    Exit Function
+FailSafe:
+    Check_ExtraRowsPresent = False
+End Function
+
+'-----------------------------
+' Set_ExtraRows — normalize inserted rows:
+' - Set labels (B10:B11) using RefFormat_Header_Add formatting
+' - Clear/format C10:C11 answers using RefFormat_Answer_Add formatting
+' - Force C10:C11 to Text format ("@") to prevent auto-date coercion
+'-----------------------------
+Private Sub Set_ExtraRows()
+    ' Labels (B10:B11)
+    CopyFormats FromCell:=Me.Range(RefFormat_Header_Add), _
+                ToRange:=Me.Range(IncludeJobFrom_Lbl_Add & ":" & IncludeJobTo_Lbl_Add)
+    Me.Range(IncludeJobFrom_Lbl_Add).Value = "From:"
+    Me.Range(IncludeJobTo_Lbl_Add).Value = "To:"
+
+    ' Answer date cells (C10:C11) - clear and apply answer formatting, remove any DV, force Text
+    With IncludeJob_Y_DatesRange()
+        .ClearContents
+        On Error Resume Next
+        .Validation.Delete
+        On Error GoTo 0
+        CopyFormats FromCell:=Me.Range(RefFormat_Answer_Add), ToRange:=.Cells
+        .NumberFormat = "@"
+    End With
+End Sub
+
+'-----------------------------
+' CopyFormats — copy only formats from FromCell to ToRange
+'-----------------------------
+Private Sub CopyFormats(ByVal FromCell As Range, ByVal ToRange As Range)
+    FromCell.Copy
+    ToRange.PasteSpecial Paste:=xlPasteFormats
+    Application.CutCopyMode = False
+End Sub
+
+'-----------------------------
+' Ensure_DateCells_TextFormat — keep date-entry cells as Text to avoid auto-coercion
+' - C5 always
+' - C10:C11 when extra rows are present
+'-----------------------------
+Private Sub Ensure_DateCells_TextFormat()
+    On Error Resume Next
+    Me.Range(EffectiveDate_Ans_Add).NumberFormat = "@"
+    If Check_ExtraRowsPresent() Then
+        Me.Range(IncludeJobFrom_Ans_Add & ":" & IncludeJobTo_Ans_Add).NumberFormat = "@"
+    End If
+    On Error GoTo 0
+End Sub
+
+'-----------------------------
+' Apply_NumericValidation_WaiverFactors — numbers-only DV on active block (no alerts)
+' Also requires > 0 (strictly positive). Errors are not shown (ShowError=False).
+'-----------------------------
+Private Sub Apply_NumericValidation_WaiverFactors()
+    Dim rng As Range
+    Clear_DataValidation_WaiverFactors
+
+    If Check_ExtraRowsPresent() Then
+        Set rng = Shifted_DataRange()
+    Else
+        Set rng = Normal_DataRange()
+    End If
+
+    With rng.Validation
+        .Delete
+        ' Require decimal > 0
+        .Add Type:=xlValidateDecimal, Operator:=xlGreater, Formula1:="0"
+        .IgnoreBlank = True
+        .InCellDropdown = False
+        .ShowError = False
+    End With
+End Sub
+
+'-----------------------------
+' Clear_DataValidation_WaiverFactors — removes DV on both potential ranges
+'-----------------------------
+Private Sub Clear_DataValidation_WaiverFactors()
+    On Error Resume Next
+    Normal_DataRange().Validation.Delete
+    Shifted_DataRange().Validation.Delete
+    On Error GoTo 0
+End Sub
+
+'-----------------------------
+' Handle_DataChange — silent numeric enforcement on edited cells in active data block
+' - Allows blanks
+' - Converts numeric strings to numbers
+' - Clears non-numeric entries
+' - Enforces > 0: negatives cleared; zero cleared
+'-----------------------------
+Private Sub Handle_DataChange(ByVal rngChanged As Range)
+    On Error GoTo CleanExit
+    Application.EnableEvents = False
+
+    Dim c As Range, v As Variant, d As Double
+    For Each c In rngChanged.Cells
+        v = c.Value2
+        If Len(v) = 0 Then
+            ' allow blanks
+        ElseIf IsNumeric(v) Then
+            d = CDbl(v)
+            If d <= 0# Then
+                c.ClearContents   ' zero or negative → clear
+            ElseIf VarType(v) = vbString Then
+                On Error Resume Next
+                c.Value = d       ' coerce numeric string to number
+                On Error GoTo 0
+            End If
+        Else
+            c.ClearContents       ' non-numeric → clear
+        End If
+    Next c
+
+CleanExit:
+    Application.EnableEvents = True
+End Sub
+
+'-----------------------------
+' Handle_IncLimits — IncLimits > 1 → show Proceed/Edit dialog
+'-----------------------------
+Private Sub Handle_IncLimits(ByVal incCell As Range)
+    Dim v As Variant
+    v = incCell.Value2
+    If Len(v) = 0 Then Exit Sub
+    If Not IsNumeric(v) Then Exit Sub
+
+    Dim x As Double
+    x = CDbl(v)
+    If x <= 1# Then Exit Sub
+
+    Dim f As ufIncLimitsConfirm
+    Set f = New ufIncLimitsConfirm
+    f.Setup x
+    f.Show vbModal
+
+    If Not f.ChosenProceed Then
+        Application.EnableEvents = False
+        incCell.ClearContents
+        Application.EnableEvents = True
+    End If
+
+    Unload f
+    Set f = Nothing
+End Sub
+
+'-----------------------------
+' Handle_PremiumDisc — 0 < PremiumDisc < 1 → show Proceed/Edit dialog; outside range → clear
+'-----------------------------
+Private Sub Handle_PremiumDisc(ByVal pdCell As Range)
+    Dim v As Variant: v = pdCell.Value2
+    If Len(v) = 0 Then Exit Sub               ' blank allowed
+    If Not IsNumeric(v) Then Exit Sub         ' numeric handler will clear later
+
+    Dim x As Double: x = CDbl(v)
+
+    ' Outside allowed range → clear silently
+    If x <= 0# Or x >= 1# Then
+        Dim prev As Boolean
+        prev = Application.EnableEvents
+        Application.EnableEvents = False
+        pdCell.ClearContents
+        Application.EnableEvents = prev
+        Exit Sub
+    End If
+
+    ' Inside allowed range → confirm
+    Dim f As ufPremiumDiscConfirm
+    Set f = New ufPremiumDiscConfirm
+    f.Setup x
+    f.Show vbModal
+
+    If Not f.ChosenProceed Then
+        Application.EnableEvents = False
+        pdCell.ClearContents
+        Application.EnableEvents = True
+    Else
+        ' Keep as typed and compute immediately
+        UpdateValues_AllVars
+        Compute_WaiverCharge
+    End If
+
+    Unload f
+    Set f = Nothing
+End Sub
+
+'-----------------------------
+' Compute_WaiverCharge — calculates & writes result (rounded int) to baseRow+10
+'-----------------------------
+Private Sub Compute_WaiverCharge()
+    Dim baseRow As Long: baseRow = IIf(Check_ExtraRowsPresent(), Shifted_BaseRow, Normal_BaseRow)
+
+    ' Guard: visible CCRate/Payroll must be non-blank before computing
+    If Len(Me.Range(CCRate_Ans_Add).Value2) = 0 Or _
+       Len(Me.Range(Payroll_Ans_Add).Value2) = 0 Then
+        Dim prevEvtClear As Boolean
+        prevEvtClear = Application.EnableEvents
+        Application.EnableEvents = False
+        Me.Cells(baseRow + 10, Answer_Col).ClearContents
+        Application.EnableEvents = prevEvtClear
+        Exit Sub
+    End If
+
+    ' WaiverCharge
+    WaiverCharge_Ans_Val = (Payroll_Ans_Val * CCRate_Ans_Val / 100#) * _
+                           IncLimits_Ans_Val * ExMod_Ans_Val * SchMod_Ans_Val * _
+                           PremiumDisc_Ans_Val * TierFactor_Ans_Val
+
+    ' Write rounded integer (cell already formatted as currency, no decimals)
+    Dim outCell As Range
+    Set outCell = Me.Cells(baseRow + 10, Answer_Col)
+
+    Dim prevEvtWrite As Boolean
+    prevEvtWrite = Application.EnableEvents
+    Application.EnableEvents = False
+    On Error Resume Next
+    outCell.Value = Application.WorksheetFunction.Round(WaiverCharge_Ans_Val, 0)
+    On Error GoTo 0
+    Application.EnableEvents = prevEvtWrite
+End Sub
+
+'-----------------------------
+' UpdateValues_AllVars — refresh all module-level values from active data block
+'-----------------------------
+Private Sub UpdateValues_AllVars()
+    Dim baseRow As Long
+    baseRow = IIf(Check_ExtraRowsPresent(), Shifted_BaseRow, Normal_BaseRow)
+
+    ' Values from dynamic addresses (no offset math)
+    CCRate_Ans_Val   = Convert_Numeric_Double(Me.Range(CCRate_Ans_Add).Value2)
+    Payroll_Ans_Val  = Convert_Numeric_Double(Me.Range(Payroll_Ans_Add).Value2)
+
+    ' Others by offset within active data block
+    CC_Ans_Val          = Convert_Numeric_Double(Me.Cells(baseRow + 0, Answer_Col).Value2)
+    ExMod_Ans_Val       = Convert_Numeric_Double(Me.Cells(baseRow + 4, Answer_Col).Value2)
+    SchMod_Ans_Val      = Convert_Numeric_Double(Me.Cells(baseRow + 5, Answer_Col).Value2)
+    TierFactor_Ans_Val  = Convert_Numeric_Double(Me.Cells(baseRow + 7, Answer_Col).Value2)
+
+    ' IncLimits (raw → adjusted)
+    Dim incRaw As Double
+    If Len(Me.Range(IncLimits_Ans_Add).Value2) = 0 Then
+        IncLimits_Ans_Val = 1#
+    Else
+        incRaw = Convert_Numeric_Double(Me.Range(IncLimits_Ans_Add).Value2)
+        If incRaw < 1# Then
+            IncLimits_Ans_Val = 1# + incRaw
+        Else
+            IncLimits_Ans_Val = incRaw
+        End If
+    End If
+
+    ' PremiumDisc (raw → adjusted)
+    Dim pdRaw As Double
+    If Len(Me.Range(PremiumDisc_Ans_Add).Value2) = 0 Then
+        PremiumDisc_Ans_Val = 1#
+    Else
+        pdRaw = Convert_Numeric_Double(Me.Range(PremiumDisc_Ans_Add).Value2) ' guaranteed 0<val<1 by Handle_PremiumDisc
+        PremiumDisc_Ans_Val = 1# - pdRaw
+    End If
+End Sub
+
+'-----------------------------
+' Convert_Numeric_Double — convert to Double; blanks/non-numeric → default (1 by default)
+'-----------------------------
+Private Function Convert_Numeric_Double(ByVal v As Variant, Optional ByVal defaultVal As Double = 1#) As Double
+    If IsError(v) Then
+        Convert_Numeric_Double = defaultVal
+    ElseIf IsEmpty(v) Then
+        Convert_Numeric_Double = defaultVal
+    ElseIf VarType(v) = vbString Then
+        If Trim$(v) = vbNullString Then
+            Convert_Numeric_Double = defaultVal
+        ElseIf IsNumeric(v) Then
+            Convert_Numeric_Double = CDbl(v)
+        Else
+            Convert_Numeric_Double = defaultVal
+        End If
+    ElseIf IsNumeric(v) Then
+        Convert_Numeric_Double = CDbl(v)
+    Else
+        Convert_Numeric_Double = defaultVal
+    End If
+End Function
+
+'-----------------------------
+' Normal_DataRange — Answer_Col & Normal_BaseRow : Answer_Col & (Normal_BaseRow + WaiverFactors_Height - 1)
+'-----------------------------
+Private Function Normal_DataRange() As Range
+    Set Normal_DataRange = Me.Range( _
+        Answer_Col & Normal_BaseRow & ":" & _
+        Answer_Col & (Normal_BaseRow + WaiverFactors_Height - 1))
+End Function
+
+'-----------------------------
+' Shifted_DataRange — Answer_Col & Shifted_BaseRow : Answer_Col & (Shifted_BaseRow + WaiverFactors_Height - 1)
+'-----------------------------
+Private Function Shifted_DataRange() As Range
+    Set Shifted_DataRange = Me.Range( _
+        Answer_Col & Shifted_BaseRow & ":" & _
+        Answer_Col & (Shifted_BaseRow + WaiverFactors_Height - 1))
+End Function
+
+'-----------------------------
+' IncludeJob_Y_RowsRange — entire rows for the job date labels (From/To)
+'-----------------------------
+Private Function IncludeJob_Y_RowsRange() As Range
+    Dim r1 As Long, r2 As Long
+    r1 = Me.Range(IncludeJobFrom_Lbl_Add).Row
+    r2 = Me.Range(IncludeJobTo_Lbl_Add).Row
+    Set IncludeJob_Y_RowsRange = Me.Rows(CStr(r1) & ":" & CStr(r2))
+End Function
+
+'-----------------------------
+' IncludeJob_Y_DatesRange — C10:C11 (answers for From/To)
+'-----------------------------
+Private Function IncludeJob_Y_DatesRange() As Range
+    Set IncludeJob_Y_DatesRange = Me.Range(IncludeJobFrom_Ans_Add & ":" & IncludeJobTo_Ans_Add)
+End Function
+
+'-----------------------------
+' Validate_DateCell — per-cell input rules for dates (no popups; clear on failure)
+'-----------------------------
+Private Sub Validate_DateCell(ByVal c As Range)
+    Dim v As Variant: v = c.Value2
+    If Len(v) = 0 Then Exit Sub   ' allow blank
+
+    Dim s As String
+    s = CStr(c.Text)
+
+    ' Basic length check
+    If Len(s) < 6 Or Len(s) > 10 Then GoTo ClearIt
+
+    ' No spaces; only digits and "/" or "-"
+    Dim i As Long, ch As String, sep As String, slashCnt As Long, dashCnt As Long
+    For i = 1 To Len(s)
+        ch = Mid$(s, i, 1)
+        Select Case ch
+            Case "0" To "9", "/", "-"
+                If ch = "/" Then slashCnt = slashCnt + 1
+                If ch = "-" Then dashCnt = dashCnt + 1
+            Case Else
+                GoTo ClearIt
+        End Select
+    Next i
+
+    ' Exactly 2 separators; must be all "/" or all "-"
+    If (slashCnt + dashCnt) <> 2 Then GoTo ClearIt
+    If Not (slashCnt = 2 And dashCnt = 0) And Not (dashCnt = 2 And slashCnt = 0) Then GoTo ClearIt
+
+    ' Split and check part lengths
+    sep = IIf(slashCnt = 2, "/", "-")
+    Dim parts() As String
+    parts = Split(s, sep)
+    If UBound(parts) <> 2 Then GoTo ClearIt
+
+    Dim pm As String, pd As String, py As String
+    pm = parts(0): pd = parts(1): py = parts(2)
+
+    If Len(pm) < 1 Or Len(pm) > 2 Then GoTo ClearIt
+    If Len(pd) < 1 Or Len(pd) > 2 Then GoTo ClearIt
+    If Len(py) < 2 Or Len(py) > 4 Then GoTo ClearIt
+
+    ' All numeric parts
+    If Not (IsNumeric(pm) And IsNumeric(pd) And IsNumeric(py)) Then GoTo ClearIt
+
+    Exit Sub
+
+ClearIt:
+    Dim prev As Boolean
+    prev = Application.EnableEvents
+    Application.EnableEvents = False
+    c.ClearContents
+    Application.EnableEvents = prev
+End Sub
+
+'-----------------------------
+' Normalize_DateCellDisplay — force mm/dd/yyyy text after validation
+'-----------------------------
+Private Sub Normalize_DateCellDisplay(ByVal c As Range)
+    Dim v As Variant: v = c.Value2
+    If Len(v) = 0 Then Exit Sub
+
+    ' If Excel somehow stored a true date (unlikely since "@"), normalize via Format
+    If VarType(v) <> vbString And IsDate(v) Then
+        WriteTextNoEvent c, Format$(CDate(v), "mm/dd/yyyy")
+        Exit Sub
+    End If
+
+    Dim s As String: s = CStr(v)
+
+    ' Normalize separators to "/"
+    s = Replace$(s, "-", "/")
+
+    Dim parts() As String
+    parts = Split(s, "/")
+    If UBound(parts) <> 2 Then Exit Sub
+
+    Dim pm As String, pd As String, py As String
+    pm = parts(0)
+    pd = parts(1)
+    py = parts(2)
+
+    If Len(pm) = 1 Then pm = "0" & pm
+    If Len(pd) = 1 Then pd = "0" & pd
+
+    Select Case Len(py)
+        Case 2
+            If CInt(py) >= 50 Then
+                py = CStr(1900 + CInt(py))
+            Else
+                py = CStr(2000 + CInt(py))
+            End If
+        Case 3
+            py = Right$("0" & py, 4)
+        Case 4
+            ' ok
+    End Select
+
+    WriteTextNoEvent c, pm & "/" & pd & "/" & py
+End Sub
+
+'-----------------------------
+' Validate_JobDateOrder — requires both C10 and C11 present and normalized to mm/dd/yyyy
+'-----------------------------
+Private Sub Validate_JobDateOrder()
+    If Not Check_ExtraRowsPresent() Then Exit Sub
+
+    Dim fromCell As Range, toCell As Range
+    Set fromCell = Me.Range(IncludeJobFrom_Ans_Add)
+    Set toCell = Me.Range(IncludeJobTo_Ans_Add)
+
+    Dim sFrom As String, sTo As String
+    sFrom = Trim$(CStr(fromCell.Value2))
+    sTo = Trim$(CStr(toCell.Value2))
+
+    If Len(sFrom) = 0 Or Len(sTo) = 0 Then Exit Sub
+
+    Dim dFrom As Date, dTo As Date
+    If Not TryParse_mmddyyyy(sFrom, dFrom) Then Exit Sub
+    If Not TryParse_mmddyyyy(sTo, dTo) Then Exit Sub
+
+    If dTo < dFrom Then
+        MsgBox "The 'To' date (C11) cannot be earlier than the 'From' date (C10)." & vbCrLf & _
+               "Both values will be cleared.", vbExclamation, "Invalid date range"
+        Dim prev As Boolean
+        prev = Application.EnableEvents
+        Application.EnableEvents = False
+        fromCell.ClearContents
+        toCell.ClearContents
+        Application.EnableEvents = prev
+    End If
+End Sub
+
+' Parse mm/dd/yyyy into a Date. Assumes validated/normalized input.
+Private Function TryParse_mmddyyyy(ByVal s As String, ByRef d As Date) As Boolean
+    On Error GoTo Fail
+    Dim parts() As String
+    parts = Split(s, "/")
+    If UBound(parts) <> 2 Then Exit Function
+
+    Dim m As Long, dd As Long, y As Long
+    m = CLng(parts(0))
+    dd = CLng(parts(1))
+    y = CLng(parts(2))
+
+    d = DateSerial(y, m, dd)
+    TryParse_mmddyyyy = True
+    Exit Function
+Fail:
+    TryParse_mmddyyyy = False
+End Function
+
+' Utility: write text into a cell with events suppressed
+Private Sub WriteTextNoEvent(ByVal c As Range, ByVal s As String)
+    Dim prev As Boolean
+    prev = Application.EnableEvents
+    Application.EnableEvents = False
+    c.Value = s
+    Application.EnableEvents = prev
+End Sub
