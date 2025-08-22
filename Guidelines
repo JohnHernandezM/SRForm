@@ -38,7 +38,17 @@ Private Sub Worksheet_Change(ByVal Target As Range)
         Exit Sub
     End If
 
-    ' 2) Numeric data block (Normal/Shifted)
+    ' 2) If extra rows are present, watch the job date cells (C10:C11)
+    If ExtraRowsPresent() Then
+        Dim dateHit As Range
+        Set dateHit = Intersect(Target, JobDatesRange())
+        If Not dateHit Is Nothing Then
+            EnforceJobDateOrderWithPopup
+            Exit Sub
+        End If
+    End If
+
+    ' 3) Numeric data block (Normal/Shifted)
     Dim dataWatch As Range, hit As Range
     If ExtraRowsPresent() Then
         Set dataWatch = ShiftedDataRange()
@@ -194,6 +204,35 @@ Private Sub HandleDataChange(ByVal rngChanged As Range)
 
 CleanExit:
     Application.EnableEvents = True
+End Sub
+
+'-----------------------------
+' Enforce C11 >= C10 with popup when C10 > C11
+'   - Triggers only if extra rows are present and both cells are non-blank dates
+'-----------------------------
+Private Sub EnforceJobDateOrderWithPopup()
+    If Not ExtraRowsPresent() Then Exit Sub
+
+    Dim fromCell As Range, toCell As Range
+    Set fromCell = Me.Range(IncludeJobFrom_Answer)
+    Set toCell   = Me.Range(IncludeJobTo_Answer)
+
+    ' Require both non-blank
+    If Len(fromCell.Value2) = 0 Or Len(toCell.Value2) = 0 Then Exit Sub
+    ' Require both to be interpretable as dates
+    If Not (IsDate(fromCell.Value) And IsDate(toCell.Value)) Then Exit Sub
+
+    Dim dFrom As Date, dTo As Date
+    dFrom = CDate(fromCell.Value)
+    dTo   = CDate(toCell.Value)
+
+    If dFrom > dTo Then
+        Application.EnableEvents = False
+        MsgBox "The 'To' date (C11) must be on or after the 'From' date (C10).", vbExclamation, "Invalid Date Range"
+        fromCell.ClearContents
+        toCell.ClearContents
+        Application.EnableEvents = True
+    End If
 End Sub
 
 '-----------------------------
