@@ -376,25 +376,39 @@ Private Sub UpdateValues_AllVars()
 End Sub
 
 '-----------------------------
-' Validate_IncludeJob_Dates — MDY parser; when both C10 and C11 are parseable MDY:
-' - allow C10 = C11
-' - if C10 > C11 → show popup and clear both cells
+' Validate_IncludeJob_Dates — strict MDY; only digits + "/" or "-" (no spaces)
+' - Accepts m/d/yy, m/d/yyyy, m/dd/yy, m/dd/yyyy, mm/d/yy, mm/d/yyyy, mm/dd/yy, mm/dd/yyyy
+' - Validates only when both cells parse
+' - Allows C10 = C11; if C10 > C11 → popup + clear both
+' - If either cell has spaces or invalid characters, that cell is cleared silently
 '-----------------------------
 Private Sub Validate_IncludeJob_Dates()
     Dim fromCell As Range, toCell As Range
     Set fromCell = Me.Range(IncludeJobFrom_Ans_Add)
     Set toCell = Me.Range(IncludeJobTo_Ans_Add)
 
-    Dim vFrom As Variant, vTo As Variant
-    vFrom = fromCell.Value2
-    vTo = toCell.Value2
+    Dim sFrom As String, sTo As String
+    sFrom = CStr(fromCell.Value2)
+    sTo = CStr(toCell.Value2)
 
-    ' Validate only when both are non-blank and parseable as MDY
-    If Len(vFrom) = 0 Or Len(vTo) = 0 Then Exit Sub
+    ' If either has spaces, clear that cell silently and stop
+    If InStr(sFrom, " ") > 0 Then
+        SilentClear fromCell: Exit Sub
+    End If
+    If InStr(sTo, " ") > 0 Then
+        SilentClear toCell: Exit Sub
+    End If
+
+    ' Only proceed when both non-blank
+    If LenB(sFrom) = 0 Or LenB(sTo) = 0 Then Exit Sub
+
+    ' Reject any char other than digits, "/", "-"
+    If Not AllowedDateCharsOnly(sFrom) Then SilentClear fromCell: Exit Sub
+    If Not AllowedDateCharsOnly(sTo) Then SilentClear toCell: Exit Sub
 
     Dim dFrom As Date, dTo As Date
-    If Not Parse_MDY_Date(vFrom, dFrom) Then Exit Sub
-    If Not Parse_MDY_Date(vTo, dTo) Then Exit Sub
+    If Not Parse_MDY_Date_Strict(sFrom, dFrom) Then SilentClear fromCell: Exit Sub
+    If Not Parse_MDY_Date_Strict(sTo, dTo) Then SilentClear toCell: Exit Sub
 
     If dFrom > dTo Then
         MsgBox "The 'From' date (C10) cannot be later than the 'To' date (C11)." & vbCrLf & _
@@ -409,35 +423,68 @@ Private Sub Validate_IncludeJob_Dates()
 End Sub
 
 '-----------------------------
-' Parse_MDY_Date — parse string as M/D[/YY or YYYY]; separators: / - or space
-' Returns True and sets outDate on success; False otherwise.
-' Two-digit years mapped: 50–99 → 1950–1999; 00–49 → 2000–2049.
+' AllowedDateCharsOnly — True if s contains only 0-9 or "/" or "-" (no spaces)
 '-----------------------------
-Private Function Parse_MDY_Date(ByVal v As Variant, ByRef outDate As Date) As Boolean
+Private Function AllowedDateCharsOnly(ByVal s As String) As Boolean
+    Dim i As Long, ch As String
+    For i = 1 To Len(s)
+        ch = Mid$(s, i, 1)
+        Select Case ch
+            Case "0" To "9", "/", "-"
+                ' ok
+            Case Else
+                AllowedDateCharsOnly = False
+                Exit Function
+        End Select
+    Next i
+    AllowedDateCharsOnly = True
+End Function
+
+'-----------------------------
+' Parse_MDY_Date_Strict — accepts exactly the 8 MDY combos, separators "/" or "-"
+' - m or mm, d or dd, yy or yyyy
+' - Validates month/day ranges and guards against overflow (e.g., 2/30 invalid)
+' - Two-digit year mapping: 50–99 → 1950–1999; 00–49 → 2000–2049
+'-----------------------------
+Private Function Parse_MDY_Date_Strict(ByVal s As String, ByRef outDate As Date) As Boolean
     On Error GoTo Fail
-    If IsError(v) Or IsEmpty(v) Then Exit Function
 
-    Dim s As String
-    s = Trim$(CStr(v))
-    If s = vbNullString Then Exit Function
+    ' Quick structural check: must be exactly two separators
+    Dim sepCount As Long, i As Long, ch As String
+    For i = 1 To Len(s)
+        ch = Mid$(s, i, 1)
+        If ch = "/" Or ch = "-" Then sepCount = sepCount + 1
+    Next
+    If sepCount <> 2 Then Exit Function
 
-    ' Normalize separators to single "/"
-    s = Replace(s, "-", "/")
-    s = Replace(s, " ", "/")
-    Do While InStr(s, "//") > 0
-        s = Replace(s, "//", "/")
-    Loop
+    ' Normalize to "/"
+    Dim t As String
+    t = Replace$(s, "-", "/")
 
     Dim parts() As String
-    parts = Split(s, "/")
+    parts = Split(t, "/")
     If UBound(parts) <> 2 Then Exit Function
 
-    Dim m As Long, d As Long, y As Long
-    m = CLng(Val(parts(0)))
-    d = CLng(Val(parts(1)))
-    y = CLng(Val(parts(2)))
+    ' Each part must be 1–2 digits for M and D, and 2 or 4 digits for Y
+    Dim pm As String, pd As String, py As String
+    pm = parts(0): pd = parts(1): py = parts(2)
 
-    If y < 100 Then
+    If Len(pm) < 1 Or Len(pm) > 2 Then Exit Function
+    If Len(pd) < 1 Or Len(pd) > 2 Then Exit Function
+    If Not (Len(py) = 2 Or Len(py) = 4) Then Exit Function
+
+    ' All numeric
+    If Not IsNumeric(pm) Or Not IsNumeric(pd) Or Not IsNumeric(py) Then Exit Function
+
+    Dim m As Long, d As Long, y As Long
+    m = CLng(pm): d = CLng(pd): y = CLng(py)
+
+    ' Ranges
+    If m < 1 Or m > 12 Then Exit Function
+    If d < 1 Or d > 31 Then Exit Function
+
+    ' Two-digit year mapping
+    If Len(py) = 2 Then
         If y >= 50 Then
             y = 1900 + y
         Else
@@ -445,13 +492,28 @@ Private Function Parse_MDY_Date(ByVal v As Variant, ByRef outDate As Date) As Bo
         End If
     End If
 
-    ' Let DateSerial validate month/day overflows
-    outDate = DateSerial(y, m, d)
-    Parse_MDY_Date = True
+    ' Build and verify (avoid DateSerial overflow semantics)
+    Dim dt As Date
+    dt = DateSerial(y, m, d)
+    If Month(dt) <> m Or Day(dt) <> d Or Year(dt) <> y Then Exit Function
+
+    outDate = dt
+    Parse_MDY_Date_Strict = True
     Exit Function
 Fail:
-    Parse_MDY_Date = False
+    Parse_MDY_Date_Strict = False
 End Function
+
+'-----------------------------
+' SilentClear — clear cell with events suppressed
+'-----------------------------
+Private Sub SilentClear(ByVal c As Range)
+    Dim prev As Boolean
+    prev = Application.EnableEvents
+    Application.EnableEvents = False
+    c.ClearContents
+    Application.EnableEvents = prev
+End Sub
 
 '-----------------------------
 ' Convert_Numeric_Double — convert to Double; blanks/non-numeric → default (1 by default)
