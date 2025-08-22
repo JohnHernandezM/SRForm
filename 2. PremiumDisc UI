@@ -1,0 +1,26 @@
+Option Explicit
+
+Public ChosenProceed As Boolean
+
+Public Sub Setup(ByVal val As Double)
+    Dim vTxt As String
+    vTxt = Format$(val, "0.################") ' show what the user typed (up to many decimals)
+
+    Me.Caption = "Confirm Premium Discount"
+    Me.lblMessage.Caption = "Ensure that you enter the value currently displayed in CLS (do not use ""1 - [value]"")."
+
+    Me.cmdProceed.Caption = "Proceed with " & vTxt & " for Premium Discount."
+    Me.cmdEdit.Caption = "Edit Premium Discount"
+
+    Me.ChosenProceed = False
+End Sub
+
+Private Sub cmdProceed_Click()
+    Me.ChosenProceed = True
+    Me.Hide
+End Sub
+
+Private Sub cmdEdit_Click()
+    Me.ChosenProceed = False
+    Me.Hide
+End Sub
